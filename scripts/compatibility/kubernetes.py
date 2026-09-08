@@ -80,7 +80,6 @@ def manifest(name, images, scenario, model, client_image):
                 {"name": "HF_HUB_OFFLINE", "value": "1"},
                 {"name": "TRANSFORMERS_OFFLINE", "value": "1"},
                 {"name": "DYN_REQUEST_PLANE", "value": "tcp"},
-                {"name": "DYN_SYSTEM_PORT", "value": "8081"},
             ],
             "volumeMounts": [
                 {"name": "model", "mountPath": "/model"},

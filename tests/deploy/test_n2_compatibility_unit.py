@@ -14,6 +14,9 @@ from tests.deploy import test_n2_compatibility as suite
 
 
 @pytest.mark.pre_merge
+@pytest.mark.sglang
+@pytest.mark.core
+@pytest.mark.framework_agnostic
 @pytest.mark.unit
 @pytest.mark.gpu_0
 @pytest.mark.parametrize("failure", ["startup", "response", "cleanup"])

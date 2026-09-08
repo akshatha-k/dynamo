@@ -91,9 +91,11 @@ def compatibility_plan(request, tmp_path_factory):
 @pytest.mark.k8s
 @pytest.mark.deploy
 @pytest.mark.sglang
+@pytest.mark.framework_agnostic
 @pytest.mark.core
-# Deliberately pre-merge: version skew is the compatibility gate this PR adds.
-@pytest.mark.pre_merge
+# The dedicated PR/nightly workflow selects this file with -m k8s. Keep it
+# outside the ordinary pre_merge GPU lane, which has no cluster or image inputs.
+@pytest.mark.post_merge
 @pytest.mark.e2e
 @pytest.mark.gpu_1
 @pytest.mark.timeout(1800)
@@ -158,7 +160,7 @@ async def test_n2_compatibility(compatibility_plan, tmp_path, pair_index, scenar
     try:
         async with ManagedDeployment(
             str(output),
-            DeploymentSpec(str(source), system_port=8081),
+            DeploymentSpec(str(source)),
             namespace,
             skip_service_restart=True,
             readiness_timeout=1200,

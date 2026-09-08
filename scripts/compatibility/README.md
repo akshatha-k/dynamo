@@ -101,7 +101,12 @@ means no GPU compatibility evidence. Its result participates in
 
 The reusable workflow uses `prod-deploy-tester-v1`, creates a dedicated vCluster
 through `setup-dynamo-operator`, and invokes `dynamo-deploy-test` with
-`tests/deploy/test_n2_compatibility.py -m k8s -n 0`. The test reuses
+`tests/deploy/test_n2_compatibility.py -m k8s -n 0`. The deployment test carries `post_merge` to stay out of the ordinary GPU
+pre-merge lane; the dedicated PR workflow explicitly selects it with `-m k8s`.
+It also carries `framework_agnostic`: the engine runs in Pods, so the test client
+does not need SGLang installed. The failure-injection unit tests are selected by
+the SGLang CPU lane (`pre_merge and sglang and gpu_0`).
+The test reuses
 `ManagedDeployment` for readiness, log capture, port forwarding and teardown.
 The runner needs Kubernetes access and skopeo; it needs neither a local GPU nor
 a Docker daemon. GPU execution happens in the cluster's Worker Pods. Candidate
