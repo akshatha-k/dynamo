@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import subprocess
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -27,6 +28,36 @@ class KubernetesCompatibilityTests(unittest.TestCase):
         ):
             with self.assertRaises(ContractError):
                 resolve_image("registry/dynamo:1.4.2")
+
+    def test_transient_resolution_failure_retries_then_succeeds(self):
+        digest = "sha256:" + "a" * 64
+        with patch(
+            "scripts.compatibility.kube_manifest.command",
+            side_effect=[subprocess.TimeoutExpired("skopeo", 60), digest],
+        ) as inspect, patch("scripts.compatibility.kube_manifest.time.sleep"):
+            self.assertEqual(
+                resolve_image("registry/image:1.4.2")["pinned"],
+                "registry/image@" + digest,
+            )
+        self.assertEqual(inspect.call_count, 2)
+
+    def test_resolution_failures_are_bounded_and_identify_image(self):
+        reference = "registry/image:1.4.2"
+        for message, attempts in [
+            ("401 Unauthorized: connection reset", 1),
+            ("403 Forbidden", 1),
+            ("manifest unknown", 1),
+            ("503 Service Unavailable", 3),
+        ]:
+            with self.subTest(message=message), patch(
+                "scripts.compatibility.kube_manifest.command",
+                side_effect=subprocess.CalledProcessError(1, "skopeo", output=message),
+            ) as inspect, patch("scripts.compatibility.kube_manifest.time.sleep"):
+                with self.assertRaises(ContractError) as raised:
+                    resolve_image(reference)
+                self.assertIn(reference, str(raised.exception))
+                self.assertIn(message, str(raised.exception))
+                self.assertEqual(inspect.call_count, attempts)
 
     def test_scenarios_keep_distinct_versions_and_use_one_gpu(self):
         config = json.loads(Path(__file__).with_name("releases.json").read_text())

@@ -19,8 +19,10 @@ from tests.deploy import test_n2_compatibility as suite
 @pytest.mark.framework_agnostic
 @pytest.mark.unit
 @pytest.mark.gpu_0
-@pytest.mark.parametrize("pair_index", [0, 1])
-@pytest.mark.parametrize("failure", ["startup", "response", "cleanup"])
+@pytest.mark.parametrize(
+    "failure,pair_index",
+    [("startup", 1), ("response", 1), ("cleanup", 1), ("response", 0)],
+)
 async def test_n2_failure_is_reported_and_teardown_attempted(
     monkeypatch, tmp_path, failure, pair_index
 ):

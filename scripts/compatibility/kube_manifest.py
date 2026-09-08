@@ -4,8 +4,10 @@
 """Kubernetes manifests for the static N-2 matrix; no inference code is injected."""
 
 import re
+import subprocess
+import time
 
-from scripts.compatibility.runner import check, command
+from scripts.compatibility.runner import ContractError, check, command
 
 
 def resolve_image(reference):
@@ -14,18 +16,48 @@ def resolve_image(reference):
     check(
         version is not None, "Image tag must start with a runtime version: " + reference
     )
-    digest = command(
-        "skopeo",
-        "inspect",
-        "--override-os",
-        "linux",
-        "--override-arch",
-        "amd64",
-        "--format",
-        "{{.Digest}}",
-        "docker://" + reference,
-    ).strip()
-    check(re.fullmatch(r"sha256:[0-9a-f]{64}", digest), "Invalid image digest")
+    for attempt in range(1, 4):
+        print(f"Resolving image digest: {reference} (attempt {attempt}/3)", flush=True)
+        try:
+            digest = command(
+                "skopeo",
+                "inspect",
+                "--override-os",
+                "linux",
+                "--override-arch",
+                "amd64",
+                "--format",
+                "{{.Digest}}",
+                "docker://" + reference,
+                timeout=60,
+            ).strip()
+            break
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+            detail = error.output or str(error)
+            if isinstance(detail, bytes):
+                detail = detail.decode(errors="replace")
+            authentication_error = re.search(
+                r"unauthorized|forbidden|denied|authentication required|\b(?:401|403)\b",
+                detail,
+                re.IGNORECASE,
+            )
+            transient = isinstance(error, subprocess.TimeoutExpired) or re.search(
+                r"timeout|timed out|connection reset|connection refused|"
+                r"temporary failure|TLS handshake timeout|\b(?:429|502|503|504)\b",
+                detail,
+                re.IGNORECASE,
+            )
+            if authentication_error or not transient or attempt == 3:
+                raise ContractError(
+                    f"Image digest resolution failed for {reference} "
+                    f"on attempt {attempt}/3: {detail}"
+                ) from error
+            print(f"Image registry temporarily unavailable: {detail}", flush=True)
+            time.sleep(2 * attempt)
+    check(
+        re.fullmatch(r"sha256:[0-9a-f]{64}", digest),
+        f"Invalid image digest for {reference}: {digest}",
+    )
     repository = reference.split("@", 1)[0].rsplit(":", 1)[0]
     return {
         "reference": reference,

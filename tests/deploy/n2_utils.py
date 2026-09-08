@@ -127,7 +127,6 @@ def prepared_cache(namespace, name, image, models, shared_pvc, directory, report
             (directory / "cache-prepare.log").write_text(
                 kubectl("logs", name, "-c", "prepare")
             )
-            # Free the GPU reservation before yielding to the first baseline.
             kubectl("delete", "pod", name, "--wait=true", "--timeout=120s", timeout=150)
         yield cache
     finally:
