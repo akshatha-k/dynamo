@@ -95,10 +95,10 @@ both normal and optimized (`python -O`) mode.
 The GPU job lives in `pr.yaml`, on approved `pull-request/N` pushes. It waits
 for `frontend-copy-to-acr`, `sglang-copy-to-acr` and the operator build, then
 passes their ACR tags to `cross-version-compatibility.yml`. Relevant core,
-frontend and SGLang changes trigger the necessary builds and copies. Like other
-PR deployment tests, it respects `RUN_DEPLOY_TESTS`; a disabled deployment lane
-means no GPU compatibility evidence. Its result participates in
-`dynamo-status-check`.
+frontend, SGLang and operator changes trigger the necessary builds and copies.
+Like other PR deployment tests, it respects `RUN_DEPLOY_TESTS`; a disabled
+deployment lane means no GPU compatibility evidence. Its result participates
+in `dynamo-status-check`.
 
 The reusable workflow uses `prod-deploy-tester-v1`, creates a dedicated vCluster
 through `setup-dynamo-operator`, and invokes `dynamo-deploy-test` with

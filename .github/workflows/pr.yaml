@@ -837,6 +837,7 @@ jobs:
       !cancelled() &&
       needs.changed-files.outputs.run_deploy_tests == 'true' &&
       (needs.changed-files.outputs.core == 'true' ||
+       needs.changed-files.outputs.operator == 'true' ||
        needs.changed-files.outputs.sglang == 'true' ||
        needs.changed-files.outputs.frontend == 'true') &&
       needs.sglang-copy-to-acr.result == 'success' &&
@@ -1147,6 +1148,7 @@ jobs:
     if: |
       always() && !cancelled() &&
       (needs.changed-files.outputs.core == 'true' ||
+      needs.changed-files.outputs.operator == 'true' ||
       needs.changed-files.outputs.frontend == 'true' ||
       needs.changed-files.outputs.sglang == 'true' ||
       needs.changed-files.outputs.snapshot == 'true' ||
