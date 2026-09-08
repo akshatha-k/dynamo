@@ -5155,7 +5155,10 @@ mod tests {
             .build();
         let wire = serde_json::to_value(original).unwrap();
         let normalized: DynamoError = serde_json::from_value(wire).unwrap();
-        assert_eq!(normalized.error_type(), ErrorType::InvalidRequest);
+        assert_eq!(
+            normalized.error_type(),
+            ErrorType::Backend(BackendError::InvalidArgument)
+        );
 
         let error = anyhow::Error::new(normalized).context("request validation failed");
         assert_eq!(
@@ -7027,7 +7030,11 @@ mod tests {
         )
         .unwrap();
         let normalized: DynamoError = serde_json::from_value(wire).unwrap();
-        assert_eq!(normalized.error_type(), ErrorType::InvalidRequest);
+        assert_eq!(
+            normalized.error_type(),
+            ErrorType::Backend(BackendError::InvalidArgument)
+        );
+        assert_eq!(normalized.class(), ErrorType::InvalidRequest);
 
         for error in [
             DynamoError::builder()
