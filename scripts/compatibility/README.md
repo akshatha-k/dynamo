@@ -30,14 +30,20 @@ major transition needs an explicitly reviewed window policy. This samples the
 listed patches, not every historical patch. There is no published-only matrix
 or separate historical defect reproduction suite.
 
-Both candidate images are mandatory. Images are pulled once and pinned to
-local content IDs; the report records input references, IDs, registry digests,
-installed component versions, and immutable model revisions. Both containers
-receive the same model snapshot at `/model`, run from `/tmp`, and load models
-offline. No current-checkout code or adapter is injected into either component.
-Copying models into containers avoids shared-bind-path assumptions with DinD.
-Each pair/scenario has its own Docker network, etcd and NATS. Only one worker
-runs at a time, using GPU 0.
+Both candidate images are mandatory. Kubernetes CI resolves each registry tag
+once with `skopeo` and deploys its digest. It retains the tag's runtime version
+in `runtimeVersionOverride`, so operator configuration still matches historical
+components. The evidence records image references, pinned digests, Pod image IDs,
+installed component versions, and immutable model revisions. Init containers
+materialize the same pinned model revision at `/model` for both components;
+inference runs from `/tmp` and loads models offline. No current-checkout code or
+adapter is injected into either component.
+
+CI uses a dedicated vCluster with shared etcd/NATS and a new DGD per scenario.
+A one-GPU resource quota and sequential execution bound GPU allocation; each
+scenario waits for its Pods to disappear before the next starts. The local
+Docker runner instead owns a network, etcd and NATS per scenario, pins images
+to local content IDs, and copies model snapshots into its containers.
 
 ## Initial contracts
 
@@ -85,25 +91,34 @@ manifest. The supplied images must correspond to the target release line.
 
 `compatibility-contract-tests.yml` runs CPU harness tests on relevant PRs in
 both normal and optimized (`python -O`) mode.
-The GPU job lives in `pr.yaml`, on approved `pull-request/N` pushes, and waits
-for both `frontend-build` and `sglang-build`. It passes the runtime images tagged
-with that exact PR source SHA to `cross-version-compatibility.yml`; it never
-substitutes published images for either candidate. Changes to the harness,
-SGLang, frontend or shared core trigger both required component builds. The
-GPU result participates in `dynamo-status-check`.
+The GPU job lives in `pr.yaml`, on approved `pull-request/N` pushes. It waits
+for `frontend-copy-to-acr`, `sglang-copy-to-acr` and the operator build, then
+passes their ACR tags to `cross-version-compatibility.yml`. Relevant core,
+frontend and SGLang changes trigger the necessary builds and copies. Like other
+PR deployment tests, it respects `RUN_DEPLOY_TESTS`; a disabled deployment lane
+means no GPU compatibility evidence. Its result participates in
+`dynamo-status-check`.
 
-Nightly uses the same five-pair runner with its SHA-tagged nightly artifacts.
-The reusable/manual workflow also accepts two candidate images and an optional
-release line for release-candidate validation. V1 does not change release
-promotion gates. CI authenticates to ECR via the existing registry action and
-pulls historical images from NGC. The GPU lane defaults to
-`prod-tester-amd-gpu-v2`; `N2_GPU_RUNNER` can select another compatible runner.
-The job timeout is 120 minutes.
+The reusable workflow uses `prod-deploy-tester-v1`, creates a dedicated vCluster
+through `setup-dynamo-operator`, and invokes `dynamo-deploy-test` with
+`tests/deploy/test_n2_compatibility.py -m k8s -n 0`. The test reuses
+`ManagedDeployment` for readiness, log capture, port forwarding and teardown.
+The runner needs Kubernetes access and skopeo; it needs neither a local GPU nor
+a Docker daemon. GPU execution happens in the cluster's Worker Pods. Candidate
+images come from ACR, historical release images from NGC. Both must be pullable
+by the cluster, and the GPU driver must support all selected CUDA images.
+
+Nightly runs the same ten scenarios with its ACR nightly artifacts. Manual
+runs accept `frontend_tag`, `worker_tag`, `operator_tag` and optional
+`release_line`. Component tags must start with their semantic runtime version,
+as the shared ACR copy workflow's tags do. The job timeout is 300 minutes; a
+separate always-run job tears down the vCluster after success, failure or
+cancellation. V1 does not change release promotion gates.
 
 Any startup, request, validation or cleanup failure makes the job fail. Later
 cases and pairs continue after a scenario failure. Artifacts contain the
-report, raw requests/responses or SSE lines, container logs/states and installed
-versions; model weights are excluded. Compare failures with the
+plan, per-scenario reports, raw requests/responses or SSE lines, Pod logs,
+image IDs, events, installed versions and JUnit results; model weights are excluded. Compare failures with the
 candidate/candidate control before attributing them to version skew. A healthy
 control is useful evidence but does not by itself rule out an issue specific
 to a historical engine or its launch configuration.

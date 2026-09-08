@@ -4,79 +4,117 @@ name: Cross-version compatibility
 on:
   workflow_dispatch:
     inputs:
-      frontend_image:
-        description: Candidate frontend image (tag or digest; resolved once before testing)
-        required: true
+      frontend_tag:
+        description: Candidate frontend image tag in ACR
         type: string
-      worker_image:
-        description: Candidate SGLang image (tag or digest; resolved once before testing)
         required: true
+      worker_tag:
+        description: Candidate SGLang image tag in ACR
         type: string
+        required: true
+      operator_tag:
+        description: Candidate operator tag in ACR
+        type: string
+        required: true
       release_line:
-        description: Target release line (empty derives it from the checkout)
-        required: false
+        description: Target release line (empty derives it from checkout)
         type: string
+        default: ''
   workflow_call:
     inputs:
-      frontend_image:
-        required: true
+      frontend_tag:
         type: string
-      worker_image:
         required: true
+      worker_tag:
         type: string
+        required: true
+      operator_tag:
+        type: string
+        required: true
       release_line:
-        required: false
         type: string
         default: ''
       source_ref:
-        required: false
         type: string
         default: ''
     secrets:
+      AZURE_ACR_HOSTNAME:
+        required: true
+      AZURE_ACR_USER:
+        required: true
+      AZURE_ACR_PASSWORD:
+        required: true
       HF_TOKEN:
+        required: true
+      DOCKERHUB_LOGIN_USER:
+        required: false
+      DOCKERHUB_ACCESS_TOKEN:
         required: false
 permissions:
   contents: read
 jobs:
   compatibility:
-    # Requires a Docker daemon with NVIDIA runtime, a runner that shares the daemon
-    # network namespace (local Docker or a DinD sidecar), for loopback ports.
-    # Override for installations with a dedicated lane.
-    runs-on: ${{ vars.N2_GPU_RUNNER || 'prod-tester-amd-gpu-v2' }}
-    timeout-minutes: 120
+    runs-on: prod-deploy-tester-v1
+    timeout-minutes: 300
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           ref: ${{ inputs.source_ref || github.sha }}
-      - name: Log in to candidate registry
-        uses: $/.github/actions/docker-login
+          persist-credentials: false
+      - name: Create isolated vCluster with candidate operator
+        uses: $/.github/actions/setup-dynamo-operator
         with:
-          aws_default_region: ${{ vars.AWS_DEFAULT_REGION }}
-          ecr_registry: ${{ vars.ECR_REGISTRY }}
-      - name: Install isolated client dependencies
-        run: |
-          python3 -m venv "$RUNNER_TEMP/n2-client"
-          "$RUNNER_TEMP/n2-client/bin/pip" install requests==2.32.5 huggingface-hub==0.34.4
-      - name: Run CPU contract tests
-        run: |
-          "$RUNNER_TEMP/n2-client/bin/python" -m unittest discover -s scripts/compatibility -v
-      - name: Run both scenarios across the N-2 window
+          reset_existing: 'true'
+          vcluster_name: ci-${{ github.run_id }}-${{ github.run_attempt }}-n2-static
+          vcluster_namespace: gh-id-${{ github.run_id }}-${{ github.run_attempt }}-n2-static-dt
+          registry: ${{ secrets.AZURE_ACR_HOSTNAME }}
+          repository: ${{ vars.ACR_REPOSITORY }}
+          operator_tag: ${{ inputs.operator_tag }}
+          hf_token: ${{ secrets.HF_TOKEN }}
+          dockerhub_username: ${{ secrets.DOCKERHUB_LOGIN_USER }}
+          dockerhub_password: ${{ secrets.DOCKERHUB_ACCESS_TOKEN }}
+      - name: Allow the bounded compatibility suite to finish before namespace expiry
         env:
-          FRONTEND_IMAGE: ${{ inputs.frontend_image }}
-          WORKER_IMAGE: ${{ inputs.worker_image }}
-          RELEASE_LINE: ${{ inputs.release_line }}
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: |
-          "$RUNNER_TEMP/n2-client/bin/python" scripts/compatibility/runner.py \
-            --frontend-image "$FRONTEND_IMAGE" --worker-image "$WORKER_IMAGE" \
-            --release-line "$RELEASE_LINE" --output "$RUNNER_TEMP/n2-results"
-      - name: Upload evidence even on failure
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+          HOST_NAMESPACE: gh-id-${{ github.run_id }}-${{ github.run_attempt }}-n2-static-dt
+        run: kubectl label namespace "$HOST_NAMESPACE" nscleanup/ttl=21600 --overwrite
+      - name: Connect to vCluster
+        id: connect
+        uses: $/.github/actions/connect-vcluster
         with:
-          name: n2-compatibility-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            ${{ runner.temp }}/n2-results/report.json
-            ${{ runner.temp }}/n2-results/*/embedding/*
-            ${{ runner.temp }}/n2-results/*/chat/*
-          if-no-files-found: warn
+          vcluster_name: ci-${{ github.run_id }}-${{ github.run_attempt }}-n2-static
+          vcluster_namespace: gh-id-${{ github.run_id }}-${{ github.run_attempt }}-n2-static-dt
+      - name: Authenticate image digest resolution to ACR
+        uses: $/.github/actions/skopeo-login
+        with:
+          azure_acr_hostname: ${{ secrets.AZURE_ACR_HOSTNAME }}
+          azure_acr_user: ${{ secrets.AZURE_ACR_USER }}
+          azure_acr_password: ${{ secrets.AZURE_ACR_PASSWORD }}
+      - name: Test five version pairs for embedding and chat
+        uses: $/.github/actions/dynamo-deploy-test
+        env:
+          N2_RELEASE_LINE: ${{ inputs.release_line }}
+        with:
+          kubeconfig_base64: ${{ steps.connect.outputs.kubeconfig_base64 }}
+          namespace: default
+          registry: ${{ secrets.AZURE_ACR_HOSTNAME }}
+          operator_tag: ${{ inputs.operator_tag }}
+          image: ${{ secrets.AZURE_ACR_HOSTNAME }}/${{ vars.ACR_REPOSITORY }}:${{ inputs.worker_tag }}
+          test_name: n2-compatibility
+          test_file: tests/deploy/test_n2_compatibility.py
+          extra_pytest_args: --frontend-image=${{ secrets.AZURE_ACR_HOSTNAME }}/${{ vars.ACR_REPOSITORY }}:${{ inputs.frontend_tag }} -m k8s -n 0
+          # Each parameter owns one Frontend and one GPU Worker. The outer
+          # cleanup also runs on a job timeout or interrupted pytest process.
+          cleanup_deployment: 'false'
+  cleanup:
+    needs: compatibility
+    if: always()
+    runs-on: prod-deploy-tester-v1
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: $/.github/actions/teardown-dynamo-operator
+        with:
+          vcluster_name: ci-${{ github.run_id }}-${{ github.run_attempt }}-n2-static
+          vcluster_namespace: gh-id-${{ github.run_id }}-${{ github.run_attempt }}-n2-static-dt

@@ -526,6 +526,18 @@ jobs:
       copy_timeout_minutes: 20
     secrets: inherit
 
+  frontend-copy-to-acr:
+    name: frontend-nightly
+    needs: [compute-release-mode, frontend-build]
+    if: ${{ needs.compute-release-mode.outputs.run_tests == 'true' }}
+    uses: $/.github/workflows/shared-copy.yml
+    with:
+      target_tag_plain: ${{ format('{0}-nightly', needs.frontend-build.outputs.target_tag_plain) }}
+      cuda_version: '[""]'
+      override_arch: amd64
+      copy_timeout_minutes: 10
+    secrets: inherit
+
   sglang-copy-to-acr:
     name: sglang-runtime-nightly
     needs: [compute-release-mode, sglang-build]
@@ -898,12 +910,13 @@ jobs:
 
   cross-version-compatibility:
     name: SGLang N-2 compatibility
-    needs: [sglang-build, frontend-build, resolve-source-sha, compute-release-mode]
+    needs: [sglang-copy-to-acr, frontend-copy-to-acr, operator-build, resolve-source-sha, compute-release-mode]
     if: ${{ needs.compute-release-mode.outputs.run_tests == 'true' }}
     uses: $/.github/workflows/cross-version-compatibility.yml
     with:
-      frontend_image: ${{ vars.ECR_REGISTRY }}/${{ vars.ECR_REPOSITORY }}:${{ needs.resolve-source-sha.outputs.source_sha }}-${{ needs.frontend-build.outputs.target_tag_plain }}-nightly
-      worker_image: ${{ vars.ECR_REGISTRY }}/${{ vars.ECR_REPOSITORY }}:${{ needs.resolve-source-sha.outputs.source_sha }}-${{ needs.sglang-build.outputs.target_tag_plain }}-nightly
+      frontend_tag: ${{ needs.frontend-copy-to-acr.outputs.image_tag }}
+      worker_tag: ${{ needs.sglang-copy-to-acr.outputs.image_tag }}
+      operator_tag: ${{ needs.operator-build.outputs.operator_default_tag }}
       source_ref: ${{ needs.resolve-source-sha.outputs.source_sha }}
     secrets: inherit
 

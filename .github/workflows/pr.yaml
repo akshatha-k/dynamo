@@ -217,6 +217,8 @@ jobs:
   operator:
     needs: changed-files
     if: |
+      needs.changed-files.outputs.core == 'true' ||
+      needs.changed-files.outputs.frontend == 'true' ||
       needs.changed-files.outputs.operator == 'true' ||
       needs.changed-files.outputs.vllm == 'true' ||
       needs.changed-files.outputs.sglang == 'true' ||
@@ -830,15 +832,21 @@ jobs:
 
   cross-version-compatibility:
     name: SGLang N-2 compatibility
-    needs: [changed-files, sglang-build, frontend-build]
+    needs: [changed-files, sglang-copy-to-acr, frontend-copy-to-acr, operator]
     if: |
-      needs.changed-files.outputs.core == 'true' ||
-      needs.changed-files.outputs.sglang == 'true' ||
-      needs.changed-files.outputs.frontend == 'true'
+      !cancelled() &&
+      needs.changed-files.outputs.run_deploy_tests == 'true' &&
+      (needs.changed-files.outputs.core == 'true' ||
+       needs.changed-files.outputs.sglang == 'true' ||
+       needs.changed-files.outputs.frontend == 'true') &&
+      needs.sglang-copy-to-acr.result == 'success' &&
+      needs.frontend-copy-to-acr.result == 'success' &&
+      needs.operator.result == 'success'
     uses: $/.github/workflows/cross-version-compatibility.yml
     with:
-      frontend_image: ${{ vars.ECR_REGISTRY }}/${{ vars.ECR_REPOSITORY }}:${{ github.sha }}-${{ needs.frontend-build.outputs.target_tag_plain }}
-      worker_image: ${{ vars.ECR_REGISTRY }}/${{ vars.ECR_REPOSITORY }}:${{ github.sha }}-${{ needs.sglang-build.outputs.target_tag_plain }}
+      frontend_tag: ${{ needs.frontend-copy-to-acr.outputs.image_tag }}
+      worker_tag: ${{ needs.sglang-copy-to-acr.outputs.image_tag }}
+      operator_tag: ${{ needs.operator.outputs.operator_default_tag }}
       source_ref: ${{ github.sha }}
     secrets: inherit
 
@@ -1138,7 +1146,10 @@ jobs:
     needs: [changed-files, frontend-build]
     if: |
       always() && !cancelled() &&
-      (needs.changed-files.outputs.snapshot == 'true' ||
+      (needs.changed-files.outputs.core == 'true' ||
+      needs.changed-files.outputs.frontend == 'true' ||
+      needs.changed-files.outputs.sglang == 'true' ||
+      needs.changed-files.outputs.snapshot == 'true' ||
       needs.changed-files.outputs.snapshot_vllm == 'true' ||
       needs.changed-files.outputs.snapshot_sglang == 'true' ||
       needs.changed-files.outputs.snapshot_trtllm == 'true') &&
@@ -1212,6 +1223,7 @@ jobs:
     if: |
       always() && !cancelled() &&
       (needs.changed-files.outputs.core == 'true' ||
+       needs.changed-files.outputs.frontend == 'true' ||
        needs.changed-files.outputs.sglang == 'true' ||
        needs.changed-files.outputs.deploy == 'true' ||
        needs.changed-files.outputs.operator == 'true' ||
