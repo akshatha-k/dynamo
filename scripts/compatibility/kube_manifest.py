@@ -34,7 +34,7 @@ def resolve_image(reference):
     }
 
 
-def manifest(name, images, scenario, model, client_image):
+def manifest(name, images, scenario, model, client_image, cache=None):
     # One immutable model snapshot per Pod; no code from the checkout is
     # installed in either inference component. Init containers use no GPU.
     download = (
@@ -74,7 +74,8 @@ def manifest(name, images, scenario, model, client_image):
         container = {
             "name": "main",
             "image": image,
-            "command": args,
+            "command": args[:1],
+            "args": args[1:],
             "workingDir": "/tmp",
             "env": [
                 {"name": "HF_HUB_OFFLINE", "value": "1"},
@@ -129,6 +130,27 @@ def manifest(name, images, scenario, model, client_image):
                 },
             }
         )
+    if cache:
+        for component in components:
+            pod = component["podTemplate"]["spec"]
+            pod.pop("initContainers")
+            pod["volumes"][0] = {
+                "name": "model",
+                "persistentVolumeClaim": {"claimName": cache["pvc"]},
+            }
+            container = pod["containers"][0]
+            container["volumeMounts"][0]["readOnly"] = True
+            path = (
+                "/model/hub/models--"
+                + model["id"].replace("/", "--")
+                + "/snapshots/"
+                + model["revision"]
+            )
+            container["args"] = [
+                path if arg == "/model" else arg for arg in container["args"]
+            ]
+            if cache.get("hostname"):
+                pod["nodeSelector"] = {"kubernetes.io/hostname": cache["hostname"]}
     return {
         "apiVersion": "nvidia.com/v1beta1",
         "kind": "DynamoGraphDeployment",
@@ -136,7 +158,7 @@ def manifest(name, images, scenario, model, client_image):
             "name": name,
             "annotations": {
                 "nvidia.com/enable-grove": "false",
-                "nvidia.com/dynamo-discovery-backend": "etcd",
+                "nvidia.com/dynamo-discovery-backend": "kubernetes",
             },
         },
         "spec": {"components": components},

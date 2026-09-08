@@ -7,6 +7,7 @@ import asyncio
 import json
 import os
 import re
+import time
 import uuid
 from pathlib import Path
 
@@ -15,6 +16,7 @@ import pytest
 from scripts.compatibility.kube_manifest import manifest, resolve_image
 from scripts.compatibility.runner import check, command, matrix, probe, wait_ready
 from tests.deploy.dgd_utils import DeploymentSpec, ManagedDeployment
+from tests.deploy.n2_utils import phase, prepared_cache
 from tests.utils.test_output import resolve_test_output_path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -39,10 +41,14 @@ def compatibility_plan(request, tmp_path_factory):
         )[1]
     )
     pairs = matrix(config["releases"], line, frontend, worker)
-    images = {
-        ref: resolve_image(ref)
-        for ref in sorted({ref for _, fe, wk in pairs for ref in (fe, wk)})
-    }
+    output = Path(resolve_test_output_path("n2-compatibility"))
+    output.mkdir(parents=True, exist_ok=True)
+    setup_report = {"status": "failed"}
+    with phase(setup_report, "resolve_images"):
+        images = {
+            ref: resolve_image(ref)
+            for ref in sorted({ref for _, fe, wk in pairs for ref in (fe, wk)})
+        }
     namespace = request.config.getoption("--namespace") or "default"
     # The workflow owns this vCluster. The quota prevents a leaked terminating
     # worker from allowing another GPU allocation in the next parameter.
@@ -62,8 +68,6 @@ def compatibility_plan(request, tmp_path_factory):
             }
         )
     )
-    output = Path(resolve_test_output_path("n2-compatibility"))
-    output.mkdir(parents=True, exist_ok=True)
     plan = {
         "line": line,
         "pairs": pairs,
@@ -75,8 +79,25 @@ def compatibility_plan(request, tmp_path_factory):
     (output / "plan.json").write_text(json.dumps(plan, indent=2))
     try:
         command("kubectl", "-n", namespace, "create", "-f", str(path))
-        yield plan
+        with prepared_cache(
+            namespace,
+            name + "-cache",
+            plan["client_image"],
+            plan["models"],
+            request.config.getoption("--model-cache-pvc"),
+            output,
+            setup_report,
+        ) as cache:
+            plan["cache"] = cache
+            (output / "plan.json").write_text(json.dumps(plan, indent=2))
+            setup_report["status"] = "passed"
+            yield plan
+    except Exception as error:
+        setup_report["status"] = "failed"
+        setup_report["error"] = str(error)
+        raise
     finally:
+        (output / "setup-report.json").write_text(json.dumps(setup_report, indent=2))
         command(
             "kubectl",
             "-n",
@@ -98,7 +119,8 @@ def compatibility_plan(request, tmp_path_factory):
 @pytest.mark.post_merge
 @pytest.mark.e2e
 @pytest.mark.gpu_1
-@pytest.mark.timeout(1800)
+@pytest.mark.timeout(2700)  # First baseline includes one-time model preparation.
+@pytest.mark.parametrize("scenario", ["embedding", "chat"])
 @pytest.mark.parametrize(
     "pair_index",
     range(5),
@@ -110,7 +132,6 @@ def compatibility_plan(request, tmp_path_factory):
         "old-worker-2",
     ],
 )
-@pytest.mark.parametrize("scenario", ["embedding", "chat"])
 async def test_n2_compatibility(compatibility_plan, tmp_path, pair_index, scenario):
     plan = compatibility_plan
     pair, frontend, worker = plan["pairs"][pair_index]
@@ -123,7 +144,11 @@ async def test_n2_compatibility(compatibility_plan, tmp_path, pair_index, scenar
     model = plan["models"][scenario]
     source = tmp_path / "dgd.json"
     source.write_text(
-        json.dumps(manifest(name, images, scenario, model, plan["client_image"]))
+        json.dumps(
+            manifest(
+                name, images, scenario, model, plan["client_image"], plan.get("cache")
+            )
+        )
     )
     (output / "dgd.json").write_text(source.read_text())
     report = {
@@ -154,9 +179,26 @@ async def test_n2_compatibility(compatibility_plan, tmp_path, pair_index, scenar
                     *(["-l", label] if resource == "pods" else []),
                 )
                 (output / f"{resource}.json").write_text(data)
+                if resource == "pods":
+                    report["pod_timeline"] = [
+                        {
+                            "name": pod["metadata"]["name"],
+                            "created": pod["metadata"].get("creationTimestamp"),
+                            "conditions": pod.get("status", {}).get("conditions", []),
+                            "containers": pod.get("status", {}).get(
+                                "containerStatuses", []
+                            ),
+                            "init_containers": pod.get("status", {}).get(
+                                "initContainerStatuses", []
+                            ),
+                        }
+                        for pod in json.loads(data)["items"]
+                    ]
             except Exception as error:
                 (output / f"{resource}-error.txt").write_text(str(error))
 
+    startup_clock = time.monotonic()
+    print(f"N-2 starting {pair}/{scenario}", flush=True)
     try:
         async with ManagedDeployment(
             str(output),
@@ -164,7 +206,11 @@ async def test_n2_compatibility(compatibility_plan, tmp_path, pair_index, scenar
             namespace,
             skip_service_restart=True,
             readiness_timeout=1200,
+            fail_fast_startup=True,
         ) as deployment:
+            report.setdefault("timings_seconds", {})["deployment_ready"] = round(
+                time.monotonic() - startup_clock, 3
+            )
             try:
                 pods = await asyncio.to_thread(deployment.get_pods)
                 for role in ("Frontend", "decode"):
@@ -188,21 +234,27 @@ async def test_n2_compatibility(compatibility_plan, tmp_path, pair_index, scenar
                 await asyncio.to_thread(
                     wait_ready, base, model["id"], lambda: None, timeout=60
                 )
-                report["cases"] = await asyncio.to_thread(
-                    probe, base, scenario, model, output
-                )
+                with phase(report, "requests"):
+                    report["cases"] = await asyncio.to_thread(
+                        probe, base, scenario, model, output
+                    )
                 check(
                     all(case["status"] == "passed" for case in report["cases"]),
                     report["cases"],
                 )
             finally:
+                serving_finished = time.monotonic()
                 await collect()
         report["status"] = "passed"
     except Exception as error:
         report["error"] = str(error)
+        report.setdefault("timings_seconds", {}).setdefault(
+            "deployment_ready", round(time.monotonic() - startup_clock, 3)
+        )
         await collect()
         raise
     finally:
+        cleanup_clock = locals().get("serving_finished", time.monotonic())
         try:
             # Cover failed __aenter__ and partial setup. DGD deletion is
             # asynchronous: wait for its Pods before releasing the next pair.
@@ -229,4 +281,17 @@ async def test_n2_compatibility(compatibility_plan, tmp_path, pair_index, scenar
             report["cleanup_error"] = str(error)
             raise
         finally:
+            report.setdefault("timings_seconds", {})["cleanup"] = round(
+                time.monotonic() - cleanup_clock, 3
+            )
             (output / "report.json").write_text(json.dumps(report, indent=2))
+            print(
+                f"N-2 {pair}/{scenario}: {report['status']} {report['timings_seconds']}",
+                flush=True,
+            )
+            if pair_index == 0 and report["status"] != "passed":
+                pytest.exit(
+                    "Candidate baseline failed; remaining compatibility matrix was not validated. See "
+                    + str(output / "report.json"),
+                    returncode=1,
+                )

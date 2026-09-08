@@ -870,6 +870,10 @@ class PodStatusDetail:
         return result
 
 
+class DeploymentStartupError(RuntimeError):
+    """A deployment cannot recover without changing its configuration."""
+
+
 @dataclass
 class ManagedDeployment:
     log_dir: str
@@ -883,6 +887,7 @@ class ManagedDeployment:
     # this below it, so _wait_for_condition raises with pod-status diagnostics
     # instead of pytest-timeout killing the test mid-wait with a bare traceback.
     readiness_timeout: int = 1800
+    fail_fast_startup: bool = False
 
     _custom_api: Optional[client.CustomObjectsApi] = None
     _core_api: Optional[client.CoreV1Api] = None
@@ -1034,6 +1039,21 @@ class ManagedDeployment:
                     plural="dynamographdeployments",
                     name=self._deployment_name,
                 )
+                if self.fail_fast_startup and desired_ready_condition_val:
+                    details = await self._get_pod_status_details()
+                    for detail in details:
+                        if detail.reason in (
+                            "InvalidImageName",
+                            "CreateContainerConfigError",
+                            "CreateContainerError",
+                        ) or (
+                            detail.restart_count >= 2
+                            and (
+                                detail.reason == "CrashLoopBackOff"
+                                or detail.state == "Terminated"
+                            )
+                        ):
+                            raise DeploymentStartupError(detail.format())
                 # Check both conditions:
                 # 1. Ready condition is True
                 # 2. State is successful
@@ -1102,6 +1122,8 @@ class ManagedDeployment:
                             for ev in pod_events:
                                 self._logger.info(f"    {ev}")
 
+            except DeploymentStartupError:
+                raise
             except exceptions.ApiException as e:
                 self._logger.info(
                     f"API Exception while checking deployment status: {e}"
@@ -1146,7 +1168,12 @@ class ManagedDeployment:
                 phase = pod_status.phase if pod_status else "Unknown"
 
                 container_statuses = (
-                    pod_status.container_statuses if pod_status else None
+                    (
+                        (pod_status.init_container_statuses or [])
+                        + (pod_status.container_statuses or [])
+                    )
+                    if pod_status
+                    else None
                 )
                 if not container_statuses:
                     details.append(

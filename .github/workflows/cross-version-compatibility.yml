@@ -65,6 +65,8 @@ jobs:
         uses: $/.github/actions/setup-dynamo-operator
         with:
           reset_existing: 'true'
+          model_cache_server: ${{ vars.AZURE_MODEL_CACHE_SERVER }}
+          model_cache_path: ${{ vars.AZURE_MODEL_CACHE_PATH }}
           vcluster_name: ci-${{ github.run_id }}-${{ github.run_attempt }}-n2-static
           vcluster_namespace: gh-id-${{ github.run_id }}-${{ github.run_attempt }}-n2-static-dt
           registry: ${{ secrets.AZURE_ACR_HOSTNAME }}
@@ -99,6 +101,7 @@ jobs:
           registry: ${{ secrets.AZURE_ACR_HOSTNAME }}
           operator_tag: ${{ inputs.operator_tag }}
           image: ${{ secrets.AZURE_ACR_HOSTNAME }}/${{ vars.ACR_REPOSITORY }}:${{ inputs.worker_tag }}
+          model_cache_pvc: ${{ vars.AZURE_MODEL_CACHE_SERVER != '' && vars.AZURE_MODEL_CACHE_PATH != '' && 'model-cache' || '' }}
           test_name: n2-compatibility
           test_file: tests/deploy/test_n2_compatibility.py
           extra_pytest_args: --frontend-image=${{ secrets.AZURE_ACR_HOSTNAME }}/${{ vars.ACR_REPOSITORY }}:${{ inputs.frontend_tag }} -m k8s -n 0

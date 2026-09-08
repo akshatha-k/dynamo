@@ -34,12 +34,13 @@ Both candidate images are mandatory. Kubernetes CI resolves each registry tag
 once with `skopeo` and deploys its digest. It retains the tag's runtime version
 in `runtimeVersionOverride`, so operator configuration still matches historical
 components. The evidence records image references, pinned digests, Pod image IDs,
-installed component versions, and immutable model revisions. Init containers
-materialize the same pinned model revision at `/model` for both components;
+installed component versions, and immutable model revisions. A preparation Pod downloads both pinned model revisions once to a PVC;
+both inference components mount that cache read-only;
 inference runs from `/tmp` and loads models offline. No current-checkout code or
 adapter is injected into either component.
 
-CI uses a dedicated vCluster with shared etcd/NATS and a new DGD per scenario.
+CI uses a dedicated vCluster with Kubernetes-native discovery and a new DGD per
+scenario. It requires neither etcd nor NATS.
 A one-GPU resource quota and sequential execution bound GPU allocation; each
 scenario waits for its Pods to disappear before the next starts. The local
 Docker runner instead owns a network, etcd and NATS per scenario, pins images
@@ -120,8 +121,27 @@ as the shared ACR copy workflow's tags do. The job timeout is 300 minutes; a
 separate always-run job tears down the vCluster after success, failure or
 cancellation. V1 does not change release promotion gates.
 
-Any startup, request, validation or cleanup failure makes the job fail. Later
-cases and pairs continue after a scenario failure. Artifacts contain the
+Both candidate/candidate scenarios run before historical pairs. A baseline
+failure ends the session with a nonzero exit and explicitly reports that the
+remaining matrix was not validated. Historical-pair failures continue through
+the remaining combinations. Repeated startup crashes (at least two restarts)
+and invalid container configurations fail early; image downloads and normal
+model initialization retain the bounded readiness wait.
+
+Model preparation uses the existing shared model-cache PVC when configured.
+Otherwise it creates a run-owned 10 GiB RWO PVC using the cluster's default
+StorageClass. A preparation Pod temporarily reserves the suite's one GPU to
+place that volume on a GPU node, releases it before serving, and pins subsequent
+Pods to that node so Frontend and Worker can share the RWO volume. This fallback
+requires a default dynamically provisioned StorageClass and a writable volume.
+Shared PVCs are preserved; run-owned PVCs are deleted. The two models are warmed
+once, rather than downloading into twenty separate inference Pod directories.
+
+Setup and per-scenario reports include phase durations; preparation logs include
+per-model download times. Pod conditions, container timestamps and Kubernetes
+Pulling/Pulled events provide scheduling and image-pull evidence. Each phase
+prints progress immediately. Measured speedup still requires an actual GPU run.
+Any startup, request, validation or cleanup failure makes the job fail. Artifacts contain the
 plan, per-scenario reports, raw requests/responses or SSE lines, Pod logs,
 image IDs, events, installed versions and JUnit results; model weights are excluded. Compare failures with the
 candidate/candidate control before attributing them to version skew. A healthy

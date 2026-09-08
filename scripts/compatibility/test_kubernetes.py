@@ -52,6 +52,16 @@ class KubernetesCompatibilityTests(unittest.TestCase):
                     container = pod["containers"][0]
                     self.assertEqual(container["image"], images[kind]["pinned"])
                     self.assertEqual(container["workingDir"], "/tmp")
+                    self.assertEqual(container["command"], ["python3"])
+                    self.assertEqual(
+                        container["args"][:2],
+                        [
+                            "-m",
+                            "dynamo.frontend"
+                            if kind == "frontend"
+                            else "dynamo.sglang",
+                        ],
+                    )
                     self.assertNotIn(
                         "DYN_SYSTEM_PORT", {env["name"] for env in container["env"]}
                     )
@@ -73,6 +83,42 @@ class KubernetesCompatibilityTests(unittest.TestCase):
                     worker_container["resources"]["limits"]["nvidia.com/gpu"], "1"
                 )
                 self.assertEqual(
-                    "--embedding-worker" in worker_container["command"],
+                    "--embedding-worker" in worker_container["args"],
                     scenario == "embedding",
                 )
+
+    def test_cached_manifest_reuses_snapshot_without_download_init(self):
+        model = {"id": "org/model", "revision": "a" * 40}
+        images = {
+            role: {"pinned": role, "version": "1.5.0"}
+            for role in ("frontend", "worker")
+        }
+        dgd = manifest(
+            "test",
+            images,
+            "embedding",
+            model,
+            "client",
+            {"pvc": "cache", "hostname": "gpu-node"},
+        )
+        self.assertEqual(
+            dgd["metadata"]["annotations"]["nvidia.com/dynamo-discovery-backend"],
+            "kubernetes",
+        )
+        for component in dgd["spec"]["components"]:
+            pod = component["podTemplate"]["spec"]
+            self.assertNotIn("initContainers", pod)
+            self.assertEqual(
+                pod["nodeSelector"], {"kubernetes.io/hostname": "gpu-node"}
+            )
+            self.assertEqual(
+                pod["volumes"][0]["persistentVolumeClaim"]["claimName"], "cache"
+            )
+            self.assertTrue(pod["containers"][0]["volumeMounts"][0]["readOnly"])
+        worker_args = dgd["spec"]["components"][1]["podTemplate"]["spec"]["containers"][
+            0
+        ]["args"]
+        self.assertEqual(
+            worker_args[worker_args.index("--model-path") + 1],
+            "/model/hub/models--org--model/snapshots/" + model["revision"],
+        )
