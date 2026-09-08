@@ -829,7 +829,7 @@ jobs:
     secrets: inherit
 
   cross-version-compatibility:
-    name: SGLang N-2 embedding and chat (GPU)
+    name: SGLang N-2 compatibility
     needs: [changed-files, sglang-build, frontend-build]
     if: |
       needs.changed-files.outputs.core == 'true' ||

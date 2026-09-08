@@ -897,7 +897,7 @@ jobs:
     secrets: inherit
 
   cross-version-compatibility:
-    name: SGLang candidate compatibility
+    name: SGLang N-2 compatibility
     needs: [sglang-build, frontend-build, resolve-source-sha, compute-release-mode]
     if: ${{ needs.compute-release-mode.outputs.run_tests == 'true' }}
     uses: $/.github/workflows/cross-version-compatibility.yml
