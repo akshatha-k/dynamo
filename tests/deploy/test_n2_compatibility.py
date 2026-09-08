@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.compatibility.kubernetes import manifest, resolve_image
+from scripts.compatibility.kube_manifest import manifest, resolve_image
 from scripts.compatibility.runner import check, command, matrix, probe, wait_ready
 from tests.deploy.dgd_utils import DeploymentSpec, ManagedDeployment
 from tests.utils.test_output import resolve_test_output_path

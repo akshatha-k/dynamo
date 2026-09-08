@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from runner import (
+from scripts.compatibility.runner import (
     ContractError,
     DockerStack,
     main,
@@ -150,7 +150,7 @@ class CompatibilityTests(unittest.TestCase):
                 return json.loads(self.text)
 
         with tempfile.TemporaryDirectory() as directory, patch(
-            "runner.requests.post", return_value=Response()
+            "scripts.compatibility.runner.requests.post", return_value=Response()
         ):
             results = probe(
                 "http://unused",
@@ -206,7 +206,7 @@ class CompatibilityTests(unittest.TestCase):
             return Response(json)
 
         with tempfile.TemporaryDirectory() as directory, patch(
-            "runner.requests.post", side_effect=post
+            "scripts.compatibility.runner.requests.post", side_effect=post
         ):
             result = probe("http://unused", "chat", {"id": "model"}, Path(directory))
         self.assertEqual(
@@ -256,10 +256,11 @@ class CompatibilityTests(unittest.TestCase):
                     effects[2] = [{"status": "failed", "error": "expected float array"}]
                 with patch("sys.argv", argv), patch.dict(
                     "sys.modules", {"huggingface_hub": hub}
-                ), patch("runner.command"), patch(
-                    "runner.resolve_image", side_effect=lambda r: {"id": r}
+                ), patch("scripts.compatibility.runner.command"), patch(
+                    "scripts.compatibility.runner.resolve_image",
+                    side_effect=lambda r: {"id": r},
                 ) as resolve, patch(
-                    "runner.execute", side_effect=effects
+                    "scripts.compatibility.runner.execute", side_effect=effects
                 ) as execute:
                     if failed:
                         with self.assertRaises(SystemExit):
@@ -286,7 +287,7 @@ class CompatibilityTests(unittest.TestCase):
             return "{}"
 
         with tempfile.TemporaryDirectory() as directory, patch(
-            "runner.command", side_effect=run
+            "scripts.compatibility.runner.command", side_effect=run
         ):
             with self.assertRaises(OSError):
                 with DockerStack(Path(directory)) as stack:

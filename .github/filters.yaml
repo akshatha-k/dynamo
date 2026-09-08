@@ -361,6 +361,7 @@ vllm:
 sglang:
   # The compatibility harness tests both PR-built component images.
   - 'scripts/compatibility/**'
+  - 'scripts/__init__.py'
   - 'container/deps/sglang/**'
   - 'examples/backends/sglang/**'
   - 'components/src/dynamo/sglang*/**'
@@ -389,6 +390,7 @@ sample:
 
 frontend:
   - 'scripts/compatibility/**'
+  - 'scripts/__init__.py'
   - *ci
   - '.cargo/config.toml'
   - 'lib/**'

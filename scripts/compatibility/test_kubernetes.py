@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from scripts.compatibility.kubernetes import manifest, resolve_image
+from scripts.compatibility.kube_manifest import manifest, resolve_image
 from scripts.compatibility.runner import ContractError
 
 
@@ -14,7 +14,7 @@ class KubernetesCompatibilityTests(unittest.TestCase):
     def test_resolve_preserves_registry_port_and_runtime_version(self):
         reference = "registry:5000/dynamo:1.5.0-ci-abcdef-sglang-runtime"
         digest = "sha256:" + "a" * 64
-        with patch("scripts.compatibility.kubernetes.command", return_value=digest):
+        with patch("scripts.compatibility.kube_manifest.command", return_value=digest):
             result = resolve_image(reference)
         self.assertEqual(result["pinned"], "registry:5000/dynamo@" + digest)
         self.assertEqual(result["version"], "1.5.0")
@@ -22,7 +22,9 @@ class KubernetesCompatibilityTests(unittest.TestCase):
     def test_unknown_runtime_or_bad_digest_is_not_accepted(self):
         with self.assertRaises(ContractError):
             resolve_image("registry/dynamo:latest")
-        with patch("scripts.compatibility.kubernetes.command", return_value="invalid"):
+        with patch(
+            "scripts.compatibility.kube_manifest.command", return_value="invalid"
+        ):
             with self.assertRaises(ContractError):
                 resolve_image("registry/dynamo:1.4.2")
 

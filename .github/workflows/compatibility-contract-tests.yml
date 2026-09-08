@@ -5,12 +5,14 @@ on:
   pull_request:
     paths:
       - 'scripts/compatibility/**'
+      - 'scripts/__init__.py'
       - 'tests/deploy/test_n2_compatibility.py'
       - '.github/workflows/*compatibility*.yml'
   push:
     branches: [main]
     paths:
       - 'scripts/compatibility/**'
+      - 'scripts/__init__.py'
       - 'tests/deploy/test_n2_compatibility.py'
       - '.github/workflows/*compatibility*.yml'
 permissions:

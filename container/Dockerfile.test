@@ -41,6 +41,10 @@ COPY --chmod=664 --chown=dynamo:0 tests/marker_categories.py /workspace/tests/ma
 # fixture repositories. Keep the production image unchanged and expose only
 # this script in the test image.
 COPY --chmod=664 --chown=dynamo:0 .github/scripts/apply_dev_version.py /workspace/.github/scripts/apply_dev_version.py
+# Deploy test modules import the N-2 harness during pytest collection, even
+# in CPU lanes. Runtime images copy tests but do not include scripts/.
+COPY --chmod=775 --chown=dynamo:0 scripts/compatibility/ /workspace/scripts/compatibility/
+COPY --chmod=775 --chown=dynamo:0 scripts/__init__.py /workspace/scripts/__init__.py
 # Required: blocks dynamo.vllm/sglang from shadowing the installed packages.
 COPY --chmod=664 --chown=dynamo:0 conftest.py /workspace/conftest.py
 COPY --chmod=775 --chown=dynamo:0 benchmarks/ /workspace/benchmarks/
