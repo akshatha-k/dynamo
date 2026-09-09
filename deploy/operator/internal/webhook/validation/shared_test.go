@@ -251,12 +251,51 @@ func TestValidateDynamoComponentDeploymentSharedSpecFieldPaths(t *testing.T) {
 	assertFieldPaths(t, errs, []string{
 		"spec.components[0].minAvailable",
 		"spec.components[0].sharedMemorySize",
-		"spec.components[0].type",
 		"spec.components[0].multinode",
+		"spec.components[0].type",
 		"spec.components[0].replicas",
 		"spec.components[0].eppConfig.configMapRef.name",
 		"spec.components[0].frontendSidecar",
 	})
+}
+
+func TestValidateMultinodeComponentTypes(t *testing.T) {
+	tests := []struct {
+		componentType nvidiacomv1beta1.ComponentType
+		allowed       bool
+	}{
+		{componentType: nvidiacomv1beta1.ComponentTypeWorker, allowed: true},
+		{componentType: nvidiacomv1beta1.ComponentTypePrefill, allowed: true},
+		{componentType: nvidiacomv1beta1.ComponentTypeDecode, allowed: true},
+		{componentType: nvidiacomv1beta1.ComponentTypeFrontend},
+		{componentType: nvidiacomv1beta1.ComponentTypePlanner},
+		{componentType: nvidiacomv1beta1.ComponentTypeEPP},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(tt.componentType), func(t *testing.T) {
+			spec := &nvidiacomv1beta1.DynamoComponentDeploymentSharedSpec{
+				ComponentType: tt.componentType,
+				Multinode:     &nvidiacomv1beta1.MultinodeSpec{NodeCount: 2},
+			}
+			validation := &sharedValidation{ratchetRuntimeVersion: true}
+
+			errs := validation.validateDynamoComponentDeploymentSharedSpec(
+				spec,
+				field.NewPath("spec"),
+				dynamoComponentDeploymentSharedSpecValidationOptions{},
+			)
+			if tt.allowed {
+				assertFieldPaths(t, errs, nil)
+				return
+			}
+			assertRequestValidationError(
+				t,
+				errs,
+				"spec.multinode: Forbidden: multinode is supported only for worker, prefill, or decode components",
+			)
+		})
+	}
 }
 
 func TestValidateProviderOverrideOutsideDGD(t *testing.T) {

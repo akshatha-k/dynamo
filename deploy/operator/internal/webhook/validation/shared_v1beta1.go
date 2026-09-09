@@ -115,14 +115,19 @@ func (v *sharedValidation) validateDynamoComponentDeploymentSharedSpec(
 		))
 	}
 
+	// Restrict multinode orchestration to inference-engine components.
+	if spec.Multinode != nil && !dynamo.IsWorkerComponent(string(spec.ComponentType)) {
+		allErrs = append(allErrs, field.Forbidden(
+			fldPath.Child("multinode"),
+			"multinode is supported only for worker, prefill, or decode components",
+		))
+	}
+
 	if spec.ComponentType == nvidiacomv1beta1.ComponentTypeEPP {
 		if options.validateInferencePoolAvailability {
 			if err := inferencePoolAvailabilityError(v.ctx, v.mgr); err != nil {
 				allErrs = append(allErrs, field.Forbidden(fldPath.Child("type"), fmt.Sprintf("cannot deploy EPP component: %v", err)))
 			}
-		}
-		if spec.IsMultinode() {
-			allErrs = append(allErrs, field.Forbidden(fldPath.Child("multinode"), "EPP component cannot be multinode"))
 		}
 		if spec.Replicas != nil && *spec.Replicas != 1 {
 			allErrs = append(allErrs, field.Invalid(

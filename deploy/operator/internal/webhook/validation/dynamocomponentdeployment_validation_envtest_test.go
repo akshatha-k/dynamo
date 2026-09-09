@@ -1006,7 +1006,7 @@ func TestDynamoComponentDeploymentValidator_Validate(t *testing.T) {
 				},
 			}),
 			wantWebhookErrs: []string{
-				"spec.multinode: Forbidden: EPP component cannot be multinode",
+				"spec.multinode: Forbidden: multinode is supported only for worker, prefill, or decode components",
 			},
 		},
 		{
