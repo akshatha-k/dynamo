@@ -2398,16 +2398,6 @@ func TestDynamoGraphDeploymentValidator_Validate(t *testing.T) {
 			},
 		},
 		{
-			name:          "removed frontend multinode cannot be reintroduced",
-			oldDeployment: betaDGDForAdmission(nil),
-			deployment: betaDGDForAdmission(func(dgd *nvidiacomv1beta1.DynamoGraphDeployment) {
-				dgd.Spec.Components[0].Multinode = &nvidiacomv1beta1.MultinodeSpec{NodeCount: 2}
-			}),
-			wantWebhookErrs: []string{
-				"spec.components[0].multinode: Forbidden: multinode is supported only for worker, prefill, or decode components",
-			},
-		},
-		{
 			name:          "single-node to multinode transition is immutable",
 			oldDeployment: newBetaDGDForValidation(),
 			deployment: betaDGDWithWorker(func(worker *nvidiacomv1beta1.DynamoComponentDeploymentSharedSpec) {

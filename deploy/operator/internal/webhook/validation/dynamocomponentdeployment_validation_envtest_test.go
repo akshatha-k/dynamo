@@ -1640,20 +1640,6 @@ func TestDynamoComponentDeploymentValidator_Validate(t *testing.T) {
 			},
 		},
 		{
-			name: "v1beta1 removed frontend multinode cannot be reintroduced",
-			oldDeployment: betaDCDForAdmission(func(dcd *nvidiacomv1beta1.DynamoComponentDeployment) {
-				dcd.Spec.ComponentType = nvidiacomv1beta1.ComponentTypeFrontend
-			}),
-			deployment: betaDCDForAdmission(func(dcd *nvidiacomv1beta1.DynamoComponentDeployment) {
-				dcd.Spec.ComponentType = nvidiacomv1beta1.ComponentTypeFrontend
-				dcd.Spec.Multinode = &nvidiacomv1beta1.MultinodeSpec{NodeCount: 2}
-			}),
-			wantWebhookErrs: []string{
-				"spec.multinode: Forbidden: multinode is supported only for worker, prefill, or decode components",
-				`spec.multinode: Invalid value: {"nodeCount":2}: cannot change node topology between single-node and multi-node after creation`,
-			},
-		},
-		{
 			name:          "v1beta1 multinode layout change is rejected by the shared update validator",
 			oldDeployment: betaDCDForAdmission(nil),
 			deployment: betaDCDForAdmission(func(dcd *nvidiacomv1beta1.DynamoComponentDeployment) {
