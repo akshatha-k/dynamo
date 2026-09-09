@@ -5,12 +5,18 @@
 
 import json
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
 from scripts.compatibility.runner import ContractError
+from tests.deploy import n2_utils
 from tests.deploy import test_n2_compatibility as suite
+from tests.deploy.dgd_utils import (
+    DeploymentStartupError,
+    ManagedDeployment,
+    PodStatusDetail,
+)
 
 
 @pytest.mark.pre_merge
@@ -21,7 +27,14 @@ from tests.deploy import test_n2_compatibility as suite
 @pytest.mark.gpu_0
 @pytest.mark.parametrize(
     "failure,pair_index",
-    [("startup", 1), ("response", 1), ("cleanup", 1), ("response", 0)],
+    [
+        ("startup", 1),
+        ("response", 1),
+        ("cleanup", 1),
+        ("response", 0),
+        ("response+cleanup", 0),
+        ("managed-cleanup", 1),
+    ],
 )
 async def test_n2_failure_is_reported_and_teardown_attempted(
     monkeypatch, tmp_path, failure, pair_index
@@ -52,6 +65,8 @@ async def test_n2_failure_is_reported_and_teardown_attempted(
     context = SimpleNamespace()
 
     class Deployment:
+        cleanup_errors = []
+
         async def __aenter__(self):
             if failure == "startup":
                 raise RuntimeError("startup failed")
@@ -59,9 +74,13 @@ async def test_n2_failure_is_reported_and_teardown_attempted(
 
         async def __aexit__(self, *args):
             context.exited = True
+            if failure == "managed-cleanup":
+                error = RuntimeError("managed cleanup failed")
+                self.cleanup_errors.append(error)
+                raise error
 
     def kubectl(*args, **kwargs):
-        if failure == "cleanup" and "delete" in args:
+        if "cleanup" in failure and "delete" in args:
             raise RuntimeError("cleanup failed")
         return '{"items": []}'
 
@@ -74,19 +93,30 @@ async def test_n2_failure_is_reported_and_teardown_attempted(
         suite,
         "probe",
         Mock(
-            return_value=[{"status": "failed" if failure == "response" else "passed"}]
+            return_value=[{"status": "failed" if "response" in failure else "passed"}]
         ),
     )
     expected = (
-        pytest.exit.Exception if pair_index == 0 else (RuntimeError, ContractError)
+        ExceptionGroup
+        if failure in ("cleanup", "managed-cleanup")
+        else (ContractError if "response" in failure else RuntimeError)
     )
     with pytest.raises(expected):
         await suite.test_n2_compatibility(plan, tmp_path, pair_index, "embedding")
     report = json.loads((output / "report.json").read_text())
     assert report["status"] == "failed"
     assert any("delete" in call.args for call in commands.call_args_list)
-    if failure == "cleanup":
-        assert report["cleanup_error"] == "cleanup failed"
+    assert any("wait" in call.args for call in commands.call_args_list)
+    if "cleanup" in failure:
+        assert any(e["message"] == "cleanup failed" for e in report["cleanup_errors"])
+    if "response" in failure:
+        assert report["primary_error"]["type"] == "ContractError"
+        assert "ContractError" in report["primary_error"]["traceback"]
+    if pair_index == 0:
+        before = commands.call_count
+        with pytest.raises(pytest.skip.Exception, match="not validated"):
+            await suite.test_n2_compatibility(plan, tmp_path, 1, "embedding")
+        assert commands.call_count == before
     if failure != "startup":
         assert context.exited
 
@@ -98,25 +128,19 @@ async def test_n2_failure_is_reported_and_teardown_attempted(
 @pytest.mark.unit
 @pytest.mark.gpu_0
 @pytest.mark.parametrize(
-    "reason,restarts,fatal",
+    "reason,restarts,exit_code,fatal",
     [
-        ("CrashLoopBackOff", 2, True),
-        ("CrashLoopBackOff", 1, False),
-        ("ContainerCreating", 0, False),
-        ("InvalidImageName", 0, True),
+        ("CrashLoopBackOff", 2, None, True),
+        ("CrashLoopBackOff", 1, None, False),
+        ("ContainerCreating", 0, None, False),
+        ("InvalidImageName", 0, None, True),
+        ("Completed", 2, 0, False),
+        ("Error", 2, 1, True),
     ],
 )
 async def test_startup_failure_detection(
-    monkeypatch, tmp_path, reason, restarts, fatal
+    monkeypatch, tmp_path, reason, restarts, exit_code, fatal
 ):
-    from unittest.mock import AsyncMock
-
-    from tests.deploy.dgd_utils import (
-        DeploymentStartupError,
-        ManagedDeployment,
-        PodStatusDetail,
-    )
-
     deployment = ManagedDeployment(
         str(tmp_path),
         SimpleNamespace(name="test", api_version="v1beta1"),
@@ -140,7 +164,12 @@ async def test_startup_failure_detection(
         AsyncMock(
             return_value=[
                 PodStatusDetail(
-                    "pod", "main", "Waiting", reason, restart_count=restarts
+                    "pod",
+                    "init" if exit_code is not None else "main",
+                    "Terminated" if exit_code is not None else "Waiting",
+                    reason,
+                    exit_code=exit_code,
+                    restart_count=restarts,
                 )
             ]
         ),
@@ -159,16 +188,30 @@ async def test_startup_failure_detection(
 @pytest.mark.unit
 @pytest.mark.gpu_0
 @pytest.mark.parametrize(
-    "shared,failed", [(True, False), (False, False), (False, True)]
+    "shared,failed,cleanup_failed",
+    [
+        (True, False, False),
+        (False, False, False),
+        (False, True, False),
+        (False, True, True),
+        (False, False, True),
+        (True, True, True),
+    ],
 )
-def test_cache_ownership_and_gpu_release(monkeypatch, tmp_path, shared, failed):
-    from scripts.compatibility.runner import ContractError
-    from tests.deploy import n2_utils
-
+def test_cache_ownership_and_gpu_release(
+    monkeypatch, tmp_path, shared, failed, cleanup_failed
+):
     calls = []
 
     def kubectl(*args, **kwargs):
         calls.append(args)
+        if (
+            cleanup_failed
+            and "delete" in args
+            and "pod" in args
+            and "--ignore-not-found" in args
+        ):
+            raise RuntimeError("cache Pod deletion failed")
         if "get" in args and "pod" in args:
             return json.dumps(
                 {
@@ -192,6 +235,10 @@ def test_cache_ownership_and_gpu_release(monkeypatch, tmp_path, shared, failed):
         with pytest.raises(ContractError):
             with context:
                 pytest.fail("Failed preparation must not allow inference")
+    elif cleanup_failed:
+        with pytest.raises(ExceptionGroup):
+            with context:
+                pass
     else:
         with context as cache:
             assert cache["pvc"] == ("shared" if shared else "cache")
@@ -203,3 +250,32 @@ def test_cache_ownership_and_gpu_release(monkeypatch, tmp_path, shared, failed):
     pod = next(item for item in manifest["items"] if item["kind"] == "Pod")
     assert ("resources" in pod["spec"]["containers"][0]) == (not shared)
     assert "prepare_cache" in report["timings_seconds"]
+    if cleanup_failed:
+        assert any(e["stage"] == "delete cache Pod" for e in report["cleanup_errors"])
+    if failed:
+        assert report["primary_error"]["type"] == "ContractError"
+    assert (tmp_path / "cache-report.json").exists()
+
+
+@pytest.mark.pre_merge
+@pytest.mark.sglang
+@pytest.mark.core
+@pytest.mark.framework_agnostic
+@pytest.mark.unit
+@pytest.mark.gpu_0
+@pytest.mark.parametrize("startup", [True, False])
+async def test_managed_cleanup_preserves_primary(monkeypatch, tmp_path, startup):
+    deployment = ManagedDeployment(str(tmp_path), SimpleNamespace(name="test"), "test")
+    primary = RuntimeError("original failure")
+    cleanup = RuntimeError("cleanup failure")
+    monkeypatch.setattr(deployment, "_cleanup", AsyncMock(side_effect=cleanup))
+    if startup:
+        monkeypatch.setattr(
+            deployment, "_init_kubernetes", AsyncMock(side_effect=primary)
+        )
+        with pytest.raises(RuntimeError) as raised:
+            await deployment.__aenter__()
+        assert raised.value is primary
+    else:
+        await deployment.__aexit__(type(primary), primary, primary.__traceback__)
+    assert deployment.cleanup_errors == [cleanup]

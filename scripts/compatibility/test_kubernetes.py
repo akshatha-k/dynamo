@@ -15,10 +15,13 @@ class KubernetesCompatibilityTests(unittest.TestCase):
     def test_resolve_preserves_registry_port_and_runtime_version(self):
         reference = "registry:5000/dynamo:1.5.0-ci-abcdef-sglang-runtime"
         digest = "sha256:" + "a" * 64
-        with patch("scripts.compatibility.kube_manifest.command", return_value=digest):
+        with patch(
+            "scripts.compatibility.kube_manifest.command", return_value=digest
+        ) as inspect:
             result = resolve_image(reference)
         self.assertEqual(result["pinned"], "registry:5000/dynamo@" + digest)
         self.assertEqual(result["version"], "1.5.0")
+        self.assertIn("--no-tags", inspect.call_args.args)
 
     def test_unknown_runtime_or_bad_digest_is_not_accepted(self):
         with self.assertRaises(ContractError):

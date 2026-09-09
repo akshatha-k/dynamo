@@ -888,6 +888,7 @@ class ManagedDeployment:
     # instead of pytest-timeout killing the test mid-wait with a bare traceback.
     readiness_timeout: int = 1800
     fail_fast_startup: bool = False
+    cleanup_errors: list[Exception] = field(default_factory=list, init=False)
 
     _custom_api: Optional[client.CustomObjectsApi] = None
     _core_api: Optional[client.CoreV1Api] = None
@@ -1050,7 +1051,11 @@ class ManagedDeployment:
                             detail.restart_count >= 2
                             and (
                                 detail.reason == "CrashLoopBackOff"
-                                or detail.state == "Terminated"
+                                or (
+                                    detail.state == "Terminated"
+                                    and detail.exit_code is not None
+                                    and detail.exit_code != 0
+                                )
                             )
                         ):
                             raise DeploymentStartupError(detail.format())
@@ -1767,13 +1772,22 @@ class ManagedDeployment:
             await self._create_deployment()
             await self._wait_for_ready(timeout=self.readiness_timeout)
 
-        except:
-            await self._cleanup()
+        except BaseException as error:
+            await self._cleanup_preserving_error(error)
             raise
         return self
 
+    async def _cleanup_preserving_error(self, primary):
+        try:
+            await self._cleanup()
+        except Exception as error:
+            self.cleanup_errors.append(error)
+            if primary is None:
+                raise
+            self._logger.error("Deployment cleanup also failed", exc_info=True)
+
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        await self._cleanup()
+        await self._cleanup_preserving_error(exc_val)
 
 
 async def main():

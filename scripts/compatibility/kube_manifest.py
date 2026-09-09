@@ -22,6 +22,7 @@ def resolve_image(reference):
             digest = command(
                 "skopeo",
                 "inspect",
+                "--no-tags",
                 "--override-os",
                 "linux",
                 "--override-arch",

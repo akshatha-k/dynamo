@@ -122,8 +122,9 @@ separate always-run job tears down the vCluster after success, failure or
 cancellation. V1 does not change release promotion gates.
 
 Both candidate/candidate scenarios run before historical pairs. A baseline
-failure ends the session with a nonzero exit and explicitly reports that the
-remaining matrix was not validated. Historical-pair failures continue through
+failure retains its original traceback and skips the remaining parameters before
+deployment, explicitly reporting that the remaining matrix was not validated.
+Historical-pair failures continue through
 the remaining combinations. Repeated startup crashes (at least two restarts)
 and invalid container configurations fail early; image downloads and normal
 model initialization retain the bounded readiness wait.

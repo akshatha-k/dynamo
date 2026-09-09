@@ -4,10 +4,32 @@
 """Run-scoped model preparation and phase timing for the N-2 suite."""
 
 import json
+import sys
 import time
+import traceback
 from contextlib import contextmanager
 
 from scripts.compatibility.runner import check, command
+
+
+def error_details(error, stage):
+    return {
+        "stage": stage,
+        "type": type(error).__name__,
+        "message": str(error),
+        "traceback": "".join(traceback.format_exception(error)),
+    }
+
+
+@contextmanager
+def cleanup_step(errors, report, stage):
+    """Attempt one cleanup without preventing the remaining owned-resource cleanup."""
+    try:
+        yield
+    except Exception as error:
+        errors.append(error)
+        report.setdefault("cleanup_errors", []).append(error_details(error, stage))
+        print(f"N-2 cleanup failed ({stage}): {error}", flush=True)
 
 
 @contextmanager
@@ -130,21 +152,27 @@ def prepared_cache(namespace, name, image, models, shared_pvc, directory, report
             kubectl("delete", "pod", name, "--wait=true", "--timeout=120s", timeout=150)
         yield cache
     finally:
+        primary = sys.exception()
+        errors = []
+        if primary is not None:
+            report["primary_error"] = error_details(
+                primary, "cache preparation or test body"
+            )
         # Cache logs are also available from the failed Pod, before deletion.
         # A completed Pod's timestamps are retained below via its last snapshot.
-        try:
+        with cleanup_step(errors, report, "cache logs"):
             if not (directory / "cache-prepare.log").exists():
                 (directory / "cache-prepare.log").write_text(
                     kubectl("logs", name, "-c", "prepare")
                 )
-        except Exception as error:
-            (directory / "cache-log-error.txt").write_text(str(error))
-        if "state" in locals():
-            (directory / "cache-pod.json").write_text(json.dumps(state, indent=2))
-        try:
-            events = kubectl("get", "events", "-o", "json")
-            (directory / "cache-events.json").write_text(events)
-        finally:
+        with cleanup_step(errors, report, "cache Pod snapshot"):
+            if "state" in locals():
+                (directory / "cache-pod.json").write_text(json.dumps(state, indent=2))
+        with cleanup_step(errors, report, "cache events"):
+            (directory / "cache-events.json").write_text(
+                kubectl("get", "events", "-o", "json")
+            )
+        with cleanup_step(errors, report, "delete cache Pod"):
             kubectl(
                 "delete",
                 "pod",
@@ -154,7 +182,8 @@ def prepared_cache(namespace, name, image, models, shared_pvc, directory, report
                 "--timeout=120s",
                 timeout=150,
             )
-            if not shared_pvc:
+        if not shared_pvc:
+            with cleanup_step(errors, report, "delete owned PVC"):
                 kubectl(
                     "delete",
                     "pvc",
@@ -164,3 +193,9 @@ def prepared_cache(namespace, name, image, models, shared_pvc, directory, report
                     "--timeout=120s",
                     timeout=150,
                 )
+        if primary is not None or errors:
+            report["status"] = "failed"
+        with cleanup_step(errors, report, "write cache report"):
+            (directory / "cache-report.json").write_text(json.dumps(report, indent=2))
+        if errors and primary is None:
+            raise ExceptionGroup("Cache cleanup failed", errors)

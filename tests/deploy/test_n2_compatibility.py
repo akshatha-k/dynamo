@@ -7,6 +7,7 @@ import asyncio
 import json
 import os
 import re
+import sys
 import time
 import uuid
 from pathlib import Path
@@ -16,7 +17,7 @@ import pytest
 from scripts.compatibility.kube_manifest import manifest, resolve_image
 from scripts.compatibility.runner import check, command, matrix, probe, wait_ready
 from tests.deploy.dgd_utils import DeploymentSpec, ManagedDeployment
-from tests.deploy.n2_utils import phase, prepared_cache
+from tests.deploy.n2_utils import cleanup_step, error_details, phase, prepared_cache
 from tests.utils.test_output import resolve_test_output_path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -44,11 +45,16 @@ def compatibility_plan(request, tmp_path_factory):
     output = Path(resolve_test_output_path("n2-compatibility"))
     output.mkdir(parents=True, exist_ok=True)
     setup_report = {"status": "failed"}
-    with phase(setup_report, "resolve_images"):
-        images = {
-            ref: resolve_image(ref)
-            for ref in sorted({ref for _, fe, wk in pairs for ref in (fe, wk)})
-        }
+    try:
+        with phase(setup_report, "resolve_images"):
+            images = {
+                ref: resolve_image(ref)
+                for ref in sorted({ref for _, fe, wk in pairs for ref in (fe, wk)})
+            }
+    except Exception as error:
+        setup_report["primary_error"] = error_details(error, "resolve_images")
+        (output / "setup-report.json").write_text(json.dumps(setup_report, indent=2))
+        raise
     namespace = request.config.getoption("--namespace") or "default"
     # The workflow owns this vCluster. The quota prevents a leaked terminating
     # worker from allowing another GPU allocation in the next parameter.
@@ -97,16 +103,28 @@ def compatibility_plan(request, tmp_path_factory):
         setup_report["error"] = str(error)
         raise
     finally:
-        (output / "setup-report.json").write_text(json.dumps(setup_report, indent=2))
-        command(
-            "kubectl",
-            "-n",
-            namespace,
-            "delete",
-            "resourcequota",
-            name,
-            "--ignore-not-found",
-        )
+        primary = sys.exception()
+        errors = []
+        if primary is not None:
+            setup_report["primary_error"] = error_details(primary, "setup or teardown")
+        with cleanup_step(errors, setup_report, "delete quota"):
+            command(
+                "kubectl",
+                "-n",
+                namespace,
+                "delete",
+                "resourcequota",
+                name,
+                "--ignore-not-found",
+            )
+        if errors:
+            setup_report["status"] = "failed"
+        with cleanup_step(errors, setup_report, "write setup report"):
+            (output / "setup-report.json").write_text(
+                json.dumps(setup_report, indent=2)
+            )
+        if errors and primary is None:
+            raise ExceptionGroup("Setup cleanup failed", errors)
 
 
 @pytest.mark.k8s
@@ -134,6 +152,11 @@ def compatibility_plan(request, tmp_path_factory):
 )
 async def test_n2_compatibility(compatibility_plan, tmp_path, pair_index, scenario):
     plan = compatibility_plan
+    if plan.get("baseline_failed"):
+        pytest.skip(
+            "Candidate baseline failed; remaining compatibility matrix not validated. "
+            + plan["baseline_failed"]
+        )
     pair, frontend, worker = plan["pairs"][pair_index]
     namespace = plan["namespace"]
     name = "n2-" + uuid.uuid4().hex[:10]
@@ -199,15 +222,16 @@ async def test_n2_compatibility(compatibility_plan, tmp_path, pair_index, scenar
 
     startup_clock = time.monotonic()
     print(f"N-2 starting {pair}/{scenario}", flush=True)
+    managed = ManagedDeployment(
+        str(output),
+        DeploymentSpec(str(source)),
+        namespace,
+        skip_service_restart=True,
+        readiness_timeout=1200,
+        fail_fast_startup=True,
+    )
     try:
-        async with ManagedDeployment(
-            str(output),
-            DeploymentSpec(str(source)),
-            namespace,
-            skip_service_restart=True,
-            readiness_timeout=1200,
-            fail_fast_startup=True,
-        ) as deployment:
+        async with managed as deployment:
             report.setdefault("timings_seconds", {})["deployment_ready"] = round(
                 time.monotonic() - startup_clock, 3
             )
@@ -248,16 +272,23 @@ async def test_n2_compatibility(compatibility_plan, tmp_path, pair_index, scenar
         report["status"] = "passed"
     except Exception as error:
         report["error"] = str(error)
+        if error not in managed.cleanup_errors:
+            report["primary_error"] = error_details(error, "deployment or requests")
         report.setdefault("timings_seconds", {}).setdefault(
             "deployment_ready", round(time.monotonic() - startup_clock, 3)
         )
         await collect()
-        raise
+        if error not in managed.cleanup_errors:
+            raise
     finally:
+        primary = sys.exception()
+        errors = list(managed.cleanup_errors)
+        for error in errors:
+            report.setdefault("cleanup_errors", []).append(
+                error_details(error, "managed deployment cleanup")
+            )
         cleanup_clock = locals().get("serving_finished", time.monotonic())
-        try:
-            # Cover failed __aenter__ and partial setup. DGD deletion is
-            # asynchronous: wait for its Pods before releasing the next pair.
+        with cleanup_step(errors, report, "delete DGD"):
             await kubectl(
                 "delete",
                 "dynamographdeployment",
@@ -267,6 +298,7 @@ async def test_n2_compatibility(compatibility_plan, tmp_path, pair_index, scenar
                 "--timeout=300s",
                 timeout=330,
             )
+        with cleanup_step(errors, report, "wait for Pod deletion"):
             await kubectl(
                 "wait",
                 "--for=delete",
@@ -276,22 +308,20 @@ async def test_n2_compatibility(compatibility_plan, tmp_path, pair_index, scenar
                 "--timeout=300s",
                 timeout=330,
             )
-        except Exception as error:
+        if primary is not None or errors:
             report["status"] = "failed"
-            report["cleanup_error"] = str(error)
-            raise
-        finally:
-            report.setdefault("timings_seconds", {})["cleanup"] = round(
-                time.monotonic() - cleanup_clock, 3
-            )
+        report.setdefault("timings_seconds", {})["cleanup"] = round(
+            time.monotonic() - cleanup_clock, 3
+        )
+        with cleanup_step(errors, report, "write report"):
             (output / "report.json").write_text(json.dumps(report, indent=2))
-            print(
-                f"N-2 {pair}/{scenario}: {report['status']} {report['timings_seconds']}",
-                flush=True,
-            )
-            if pair_index == 0 and report["status"] != "passed":
-                pytest.exit(
-                    "Candidate baseline failed; remaining compatibility matrix was not validated. See "
-                    + str(output / "report.json"),
-                    returncode=1,
-                )
+        if errors:
+            report["status"] = "failed"
+        if pair_index == 0 and report["status"] != "passed":
+            plan["baseline_failed"] = str(output / "report.json")
+        print(
+            f"N-2 {pair}/{scenario}: {report['status']} {report['timings_seconds']}",
+            flush=True,
+        )
+        if errors and primary is None:
+            raise ExceptionGroup("Deployment cleanup failed", errors)
