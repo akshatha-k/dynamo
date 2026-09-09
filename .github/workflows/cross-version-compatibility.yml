@@ -53,7 +53,12 @@ on:
 permissions:
   contents: read
 jobs:
+  preflight:
+    uses: $/.github/workflows/compatibility-contract-tests.yml
+    with:
+      source_ref: ${{ inputs.source_ref || github.sha }}
   compatibility:
+    needs: preflight
     runs-on: prod-deploy-tester-v1
     timeout-minutes: 300
     steps:

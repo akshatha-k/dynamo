@@ -83,6 +83,7 @@ class KubernetesCompatibilityTests(unittest.TestCase):
                         component["runtimeVersionOverride"], images[kind]["version"]
                     )
                     pod = component["podTemplate"]["spec"]
+                    self.assertEqual(pod["nodeSelector"]["kubernetes.io/arch"], "amd64")
                     container = pod["containers"][0]
                     self.assertEqual(container["image"], images[kind]["pinned"])
                     self.assertEqual(container["workingDir"], "/tmp")
@@ -91,9 +92,11 @@ class KubernetesCompatibilityTests(unittest.TestCase):
                         container["args"][:2],
                         [
                             "-m",
-                            "dynamo.frontend"
-                            if kind == "frontend"
-                            else "dynamo.sglang",
+                            (
+                                "dynamo.frontend"
+                                if kind == "frontend"
+                                else "dynamo.sglang"
+                            ),
                         ],
                     )
                     self.assertNotIn(
@@ -143,7 +146,8 @@ class KubernetesCompatibilityTests(unittest.TestCase):
             pod = component["podTemplate"]["spec"]
             self.assertNotIn("initContainers", pod)
             self.assertEqual(
-                pod["nodeSelector"], {"kubernetes.io/hostname": "gpu-node"}
+                pod["nodeSelector"],
+                {"kubernetes.io/hostname": "gpu-node", "kubernetes.io/arch": "amd64"},
             )
             self.assertEqual(
                 pod["volumes"][0]["persistentVolumeClaim"]["claimName"], "cache"

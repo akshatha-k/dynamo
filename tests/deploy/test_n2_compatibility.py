@@ -152,7 +152,12 @@ def compatibility_plan(request, tmp_path_factory):
 )
 async def test_n2_compatibility(compatibility_plan, tmp_path, pair_index, scenario):
     plan = compatibility_plan
-    if plan.get("baseline_failed"):
+    if plan.get("cleanup_failed"):
+        pytest.skip(
+            "Previous cleanup failed; cluster is not isolated. "
+            + plan["cleanup_failed"]
+        )
+    if pair_index != 0 and plan.get("baseline_failed"):
         pytest.skip(
             "Candidate baseline failed; remaining compatibility matrix not validated. "
             + plan["baseline_failed"]
@@ -317,6 +322,7 @@ async def test_n2_compatibility(compatibility_plan, tmp_path, pair_index, scenar
             (output / "report.json").write_text(json.dumps(report, indent=2))
         if errors:
             report["status"] = "failed"
+            plan["cleanup_failed"] = str(output / "report.json")
         if pair_index == 0 and report["status"] != "passed":
             plan["baseline_failed"] = str(output / "report.json")
         print(

@@ -32,6 +32,7 @@ from tests.deploy.dgd_utils import (
         ("response", 1),
         ("cleanup", 1),
         ("response", 0),
+        ("previous-baseline-response", 0),
         ("response+cleanup", 0),
         ("managed-cleanup", 1),
     ],
@@ -53,6 +54,8 @@ async def test_n2_failure_is_reported_and_teardown_attempted(
             "embedding": {"id": "test/model", "revision": "a" * 40, "dimensions": 2}
         },
     }
+    if failure.startswith("previous-baseline"):
+        plan["baseline_failed"] = "first-control/report.json"
     deployment = SimpleNamespace(
         get_pods=Mock(
             return_value={
@@ -114,8 +117,13 @@ async def test_n2_failure_is_reported_and_teardown_attempted(
         assert "ContractError" in report["primary_error"]["traceback"]
     if pair_index == 0:
         before = commands.call_count
-        with pytest.raises(pytest.skip.Exception, match="not validated"):
+        with pytest.raises(pytest.skip.Exception, match="not validated|not isolated"):
             await suite.test_n2_compatibility(plan, tmp_path, 1, "embedding")
+        assert commands.call_count == before
+    if "cleanup" in failure:
+        before = commands.call_count
+        with pytest.raises(pytest.skip.Exception, match="not isolated"):
+            await suite.test_n2_compatibility(plan, tmp_path, 0, "embedding")
         assert commands.call_count == before
     if failure != "startup":
         assert context.exited
@@ -249,6 +257,7 @@ def test_cache_ownership_and_gpu_release(
     manifest = json.loads((tmp_path / "cache.json").read_text())
     pod = next(item for item in manifest["items"] if item["kind"] == "Pod")
     assert ("resources" in pod["spec"]["containers"][0]) == (not shared)
+    assert pod["spec"]["nodeSelector"]["kubernetes.io/arch"] == "amd64"
     assert "prepare_cache" in report["timings_seconds"]
     if cleanup_failed:
         assert any(e["stage"] == "delete cache Pod" for e in report["cleanup_errors"])

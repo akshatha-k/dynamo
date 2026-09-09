@@ -35,6 +35,7 @@ once with `skopeo` and deploys its digest. It retains the tag's runtime version
 in `runtimeVersionOverride`, so operator configuration still matches historical
 components. The evidence records image references, pinned digests, Pod image IDs,
 installed component versions, and immutable model revisions. A preparation Pod downloads both pinned model revisions once to a PVC;
+the preparation Pod and both inference components select amd64 nodes;
 both inference components mount that cache read-only;
 inference runs from `/tmp` and loads models offline. No current-checkout code or
 adapter is injected into either component.
@@ -55,8 +56,11 @@ to local content IDs, and copies model snapshots into its containers.
 - **Chat Completions:** Qwen2.5-0.5B-Instruct; unary, streaming, `max_tokens=1`,
   and `stop`. Validate content, token limits, finish reasons,
   stream errors and `[DONE]`. Derive a stop string from the unary response's
-  prefix and repeat at temperature 0; require an empty stopped response with
-  finish reason `stop`. This assumes deterministic greedy output for the same
+  prefix and repeat at temperature 0; require an empty stopped response
+  (`content: ""` or `content: null`) with finish reason `stop`, without a
+  refusal or tool call. Nullable content follows the
+  [OpenAI response schema](https://github.com/openai/openai-python/blob/main/src/openai/types/chat/chat_completion_message.py).
+  Ordinary unary responses must contain nonempty text. This assumes deterministic greedy output for the same
   request on the same worker, not a particular model-generated phrase.
 
 The stop case depends on a successful unary baseline. If that fails, the
@@ -91,7 +95,10 @@ manifest. The supplied images must correspond to the target release line.
 ## CI and evidence
 
 `compatibility-contract-tests.yml` runs CPU harness tests on relevant PRs in
-both normal and optimized (`python -O`) mode.
+both normal and optimized (`python -O`) mode, plus CPU deployment failure
+injection. The GPU workflow requires this preflight to pass before creating a
+vCluster. A captured candidate chat response fixture replays real unary,
+streaming, limited and empty-stop responses through the client validators.
 The GPU job lives in `pr.yaml`, on approved `pull-request/N` pushes. It waits
 for `frontend-copy-to-acr`, `sglang-copy-to-acr` and the operator build, then
 passes their ACR tags to `cross-version-compatibility.yml`. Relevant core,
@@ -121,11 +128,13 @@ as the shared ACR copy workflow's tags do. The job timeout is 300 minutes; a
 separate always-run job tears down the vCluster after success, failure or
 cancellation. V1 does not change release promotion gates.
 
-Both candidate/candidate scenarios run before historical pairs. A baseline
-failure retains its original traceback and skips the remaining parameters before
-deployment, explicitly reporting that the remaining matrix was not validated.
-Historical-pair failures continue through
-the remaining combinations. Repeated startup crashes (at least two restarts)
+Both candidate/candidate scenarios run before historical pairs. If one baseline
+fails, the other independent baseline still runs to expose its failures in the
+same CI attempt. Historical pairs are skipped if either baseline failed, with
+the original traceback retained and the unvalidated matrix explicitly reported.
+Historical-pair failures continue through the remaining combinations only when
+cleanup succeeds. Any cleanup failure stops further deployments because the
+cluster's isolation can no longer be assumed. Repeated startup crashes (at least two restarts)
 and invalid container configurations fail early; image downloads and normal
 model initialization retain the bounded readiness wait.
 

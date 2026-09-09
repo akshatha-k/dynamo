@@ -2,11 +2,19 @@
 # SPDX-License-Identifier: Apache-2.0
 name: Compatibility harness unit tests
 on:
+  workflow_call:
+    inputs:
+      source_ref:
+        type: string
+        default: ''
   pull_request:
     paths:
       - 'scripts/compatibility/**'
       - 'scripts/__init__.py'
       - 'tests/deploy/test_n2_compatibility.py'
+      - 'tests/deploy/test_n2_compatibility_unit.py'
+      - 'tests/deploy/n2_utils.py'
+      - 'tests/deploy/dgd_utils.py'
       - '.github/workflows/*compatibility*.yml'
   push:
     branches: [main]
@@ -14,6 +22,9 @@ on:
       - 'scripts/compatibility/**'
       - 'scripts/__init__.py'
       - 'tests/deploy/test_n2_compatibility.py'
+      - 'tests/deploy/test_n2_compatibility_unit.py'
+      - 'tests/deploy/n2_utils.py'
+      - 'tests/deploy/dgd_utils.py'
       - '.github/workflows/*compatibility*.yml'
 permissions:
   contents: read
@@ -22,12 +33,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          ref: ${{ inputs.source_ref || github.sha }}
       - name: Validate the harness without GPUs or registry credentials
         run: |
           python3 -m venv "$RUNNER_TEMP/n2-client"
-          "$RUNNER_TEMP/n2-client/bin/pip" install requests==2.32.5
+          "$RUNNER_TEMP/n2-client/bin/pip" install requests==2.32.5 \
+            pytest pytest-asyncio pytest-timeout pytest-benchmark pydantic \
+            kr8s kubernetes-asyncio pyyaml
           "$RUNNER_TEMP/n2-client/bin/python" -m unittest discover -s scripts/compatibility -v
           "$RUNNER_TEMP/n2-client/bin/python" -O -m unittest discover -s scripts/compatibility -v
+          "$RUNNER_TEMP/n2-client/bin/python" -m pytest --noconftest \
+            tests/deploy/test_n2_compatibility_unit.py -q
           "$RUNNER_TEMP/n2-client/bin/python" scripts/compatibility/runner.py \
             --frontend-image candidate-frontend --worker-image candidate-worker \
             --output "$RUNNER_TEMP/unused" --plan

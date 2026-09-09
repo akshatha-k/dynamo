@@ -133,6 +133,7 @@ def manifest(name, images, scenario, model, client_image, cache=None):
                 "runtimeVersionOverride": images[kind]["version"],
                 "podTemplate": {
                     "spec": {
+                        "nodeSelector": {"kubernetes.io/arch": "amd64"},
                         "containers": [container],
                         "initContainers": [
                             {
@@ -183,7 +184,7 @@ def manifest(name, images, scenario, model, client_image, cache=None):
                 path if arg == "/model" else arg for arg in container["args"]
             ]
             if cache.get("hostname"):
-                pod["nodeSelector"] = {"kubernetes.io/hostname": cache["hostname"]}
+                pod["nodeSelector"]["kubernetes.io/hostname"] = cache["hostname"]
     return {
         "apiVersion": "nvidia.com/v1beta1",
         "kind": "DynamoGraphDeployment",

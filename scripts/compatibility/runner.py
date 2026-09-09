@@ -77,13 +77,20 @@ def validate_chat(body, max_tokens, stop=None):
     check(choice["finish_reason"] in ("stop", "length"), choice)
     message = choice["message"]
     check(message["role"] == "assistant", message)
-    check(isinstance(message["content"], str), body)
-    if max_tokens > 1 and stop is None:
-        check(message["content"].strip(), body)
-    check(0 <= body["usage"]["completion_tokens"] <= max_tokens, body)
+    content = message["content"]
+    # OpenAI ChatCompletionMessage.content is nullable. A prefix stop can
+    # suppress every generated character; retain the raw response unchanged.
+    if stop is None:
+        check(isinstance(content, str), body)
+        if max_tokens > 1:
+            check(content.strip(), body)
+    tokens = body["usage"]["completion_tokens"]
+    check(type(tokens) is int and 0 <= tokens <= max_tokens, body)
     if stop is not None:
-        check(message["content"] == "", body)  # Stop is a prefix of the baseline.
+        check(content is None or content == "", body)
         check(choice["finish_reason"] == "stop", body)
+        check(not message.get("refusal") and not message.get("tool_calls"), body)
+        check(not message.get("function_call"), body)
 
 
 def validate_stream(lines):
@@ -103,14 +110,18 @@ def validate_stream(lines):
             continue
         chunk = json.loads(data)
         check("error" not in chunk, chunk)
-        for choice in chunk["choices"]:
+        choices = chunk["choices"]
+        check(isinstance(choices, list) and len(choices) <= 1, chunk)
+        for choice in choices:
             check(choice["index"] == 0, choice)
             text = choice.get("delta", {}).get("content")
-            if text:
+            if text is not None:
                 check(isinstance(text, str), "Stream content must be a string")
+            if text:
                 check(not finished, "Content after finish_reason")
                 content.append(text)
             if choice.get("finish_reason") is not None:
+                check(not finished, "Duplicate finish_reason")
                 check(choice["finish_reason"] in ("stop", "length"), choice)
                 finished = True
     check(done and finished, "Incomplete SSE response")

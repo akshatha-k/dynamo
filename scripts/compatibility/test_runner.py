@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+import copy
 import json
 import tempfile
 import types
@@ -99,6 +100,12 @@ class CompatibilityTests(unittest.TestCase):
             "usage": {"completion_tokens": 1},
         }
         validate_chat(body, 32, "Hello")
+        body["choices"][0]["message"]["content"] = None
+        validate_chat(body, 32, "Hello")
+        for invalid in (False, 0, [], {}, "Hello world"):
+            body["choices"][0]["message"]["content"] = invalid
+            with self.assertRaises(ContractError):
+                validate_chat(body, 32, "Hello")
         body["choices"][0]["message"]["content"] = "Hello world"
         with self.assertRaises(ContractError):
             validate_chat(body, 32, "Hello")
@@ -121,9 +128,81 @@ class CompatibilityTests(unittest.TestCase):
             ['data: {"error":"worker failed"}'],
             ["event: error"],
             valid + [valid[0]],
+            [valid[0], valid[1], valid[1], valid[2]],
+            [chunk({"content": False}, None), *valid],
+            [chunk({"content": 0}, None), *valid],
+            [chunk({"content": []}, None), *valid],
         ]:
             with self.assertRaises(ContractError):
                 validate_stream(invalid)
+
+    def test_replay_actual_candidate_chat_responses(self):
+        # Captured before validation from Actions run 34302098930, job
+        # 102318994450. The stopped response contains JSON null, not "".
+        fixture = Path(__file__).with_name("fixtures") / "candidate-chat-066323a.json"
+        records = json.loads(fixture.read_text())
+        pending = iter(records)
+
+        class Response:
+            def __init__(self, record):
+                self.record = record
+                self.status_code = record["http_status"]
+                self.text = record["response"]
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                pass
+
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return json.loads(self.text)
+
+            def iter_lines(self):
+                return (line.encode() for line in self.record["response"])
+
+        def post(url, json, **kwargs):
+            record = next(pending)
+            self.assertEqual(json, record["request"])
+            return Response(record)
+
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch("scripts.compatibility.runner.requests.post", side_effect=post),
+        ):
+            results = probe(
+                "http://unused",
+                "chat",
+                {"id": records[0]["request"]["model"]},
+                Path(directory),
+            )
+            self.assertEqual(len(results), len(records))
+            self.assertTrue(all(r["status"] == "passed" for r in results), results)
+            self.assertEqual(results[-1]["response"], records[-1]["response"])
+
+    def test_null_is_only_accepted_for_empty_stop_response(self):
+        fixture = Path(__file__).with_name("fixtures") / "candidate-chat-066323a.json"
+        stopped = json.loads(json.loads(fixture.read_text())[-1]["response"])
+        for cap in (1, 32):
+            with self.assertRaises(ContractError):
+                validate_chat(stopped, cap)
+        for field, value in (
+            ("refusal", "refused"),
+            ("tool_calls", [{}]),
+            ("function_call", {}),
+        ):
+            body = copy.deepcopy(stopped)
+            body["choices"][0]["message"][field] = value or {"name": "unexpected"}
+            with self.assertRaises(ContractError):
+                validate_chat(body, 32, "Hell")
+        for tokens in (True, 0.5, -1, 33):
+            body = copy.deepcopy(stopped)
+            body["usage"]["completion_tokens"] = tokens
+            with self.assertRaises(ContractError):
+                validate_chat(body, 32, "Hell")
 
     def test_probe_records_failures_and_runs_remaining_cases(self):
         class Response:

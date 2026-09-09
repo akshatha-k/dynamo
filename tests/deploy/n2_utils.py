@@ -81,6 +81,7 @@ def prepared_cache(namespace, name, image, models, shared_pvc, directory, report
         "kind": "Pod",
         "metadata": {"name": name},
         "spec": {
+            "nodeSelector": {"kubernetes.io/arch": "amd64"},
             "restartPolicy": "Never",
             "containers": [container],
             "volumes": [
