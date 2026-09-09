@@ -726,8 +726,6 @@ func (v *dynamoGraphDeploymentValidation) validateDynamoGraphDeploymentSpecUpdat
 	}
 
 	canModifyReplicas := v.userInfo != nil && internalwebhook.CanModifyDGDReplicas(v.operatorPrincipal, *v.userInfo)
-	// The complete update entry point already ran the new-state GMS rules.
-	const validateGPUMemoryServiceNewState = false
 	componentsPath := fldPath.Child("components")
 	for i := range newSpec.Components {
 		newComponent := &newSpec.Components[i]
@@ -740,7 +738,6 @@ func (v *dynamoGraphDeploymentValidation) validateDynamoGraphDeploymentSpecUpdat
 				componentsPath.Index(i),
 				canModifyReplicas,
 				nvidiacomv1beta1.DynamoGraphDeploymentGVK.GroupKind(),
-				validateGPUMemoryServiceNewState,
 			)...)
 			allErrs = append(allErrs, v.validateDynamoGraphDeploymentSharedSpecUpdate(
 				newComponent,
