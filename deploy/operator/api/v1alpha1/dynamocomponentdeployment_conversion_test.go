@@ -108,9 +108,17 @@ func TestDCD_RoundTrip_ExplicitMultinodeRoles(t *testing.T) {
 				ComponentType: v1beta1.ComponentTypeWorker,
 				Multinode:     &v1beta1.MultinodeSpec{NodeCount: 4},
 				Roles: []v1beta1.ComponentRoleSpec{
-					{Name: v1beta1.ComponentRoleLeader},
+					{
+						Name: v1beta1.ComponentRoleLeader,
+						PodTemplate: &corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+							Name: "main", Image: "leader:latest",
+						}}}},
+					},
 					{
 						Name: v1beta1.ComponentRoleWorker,
+						PodTemplate: &corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+							Name: "main", Image: "worker:latest",
+						}}}},
 						ProviderOverride: &v1beta1.ProviderOverride{
 							APIVersion: "grove.io/v1alpha1",
 							Target:     "PodCliqueTemplateSpec",

@@ -151,6 +151,7 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `name` _string_ | Name identifies the role within the enclosing component independently of<br />generated provider resource names. |  | MaxLength: 63 <br />MinLength: 1 <br />Pattern: `^[a-z0-9]([-a-z0-9]*[a-z0-9])?$` <br />Required: \{\} <br /> |
 | `providerOverride` _[ProviderOverride](#provideroverride)_ | ProviderOverride configures the provider workload unit generated for this<br />role. It is supported only for components embedded in a DGD. |  | Optional: \{\} <br /> |
+| `podTemplate` _[PodTemplateSpec](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.28/#podtemplatespec-v1-core)_ | PodTemplate defines the Pod configuration for this role. Admission permits<br />it only when the enclosing component type explicitly supports role-specific<br />Pod templates. No component type supports it in this release. |  | Optional: \{\} <br /> |
 
 
 #### ConfigMapKeySelector
@@ -1725,6 +1726,7 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `name` _string_ | name identifies the role within the enclosing component independently of<br />generated provider resource names. |  | MaxLength: 63 <br />MinLength: 1 <br />Pattern: `^[a-z0-9]([-a-z0-9]*[a-z0-9])?$` <br />Required: \{\} <br /> |
 | `providerOverride` _[ProviderOverride](#provideroverride)_ | providerOverride configures the provider workload unit generated for this<br />role. It is supported only for components embedded in a DGD. |  | Optional: \{\} <br /> |
+| `podTemplate` _[PodTemplateSpec](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.28/#podtemplatespec-v1-core)_ | podTemplate defines the Pod configuration for this role. Admission permits<br />it only when the enclosing component type explicitly supports role-specific<br />Pod templates. No component type supports it in this release. |  | Optional: \{\} <br /> |
 
 
 #### ComponentType
