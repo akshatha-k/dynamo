@@ -259,7 +259,7 @@ func TestValidateDynamoComponentDeploymentSharedSpecFieldPaths(t *testing.T) {
 	})
 }
 
-func TestValidateMultinodeComponentTypes(t *testing.T) {
+func TestSupportsMultinodeComponentType(t *testing.T) {
 	tests := []struct {
 		componentType nvidiacomv1beta1.ComponentType
 		allowed       bool
@@ -274,26 +274,9 @@ func TestValidateMultinodeComponentTypes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(string(tt.componentType), func(t *testing.T) {
-			spec := &nvidiacomv1beta1.DynamoComponentDeploymentSharedSpec{
-				ComponentType: tt.componentType,
-				Multinode:     &nvidiacomv1beta1.MultinodeSpec{NodeCount: 2},
+			if got := supportsMultinodeComponentType(tt.componentType); got != tt.allowed {
+				t.Fatalf("supportsMultinodeComponentType(%q) = %t, want %t", tt.componentType, got, tt.allowed)
 			}
-			validation := &sharedValidation{ratchetRuntimeVersion: true}
-
-			errs := validation.validateDynamoComponentDeploymentSharedSpec(
-				spec,
-				field.NewPath("spec"),
-				dynamoComponentDeploymentSharedSpecValidationOptions{},
-			)
-			if tt.allowed {
-				assertFieldPaths(t, errs, nil)
-				return
-			}
-			assertRequestValidationError(
-				t,
-				errs,
-				"spec.multinode: Forbidden: multinode is supported only for worker, prefill, or decode components",
-			)
 		})
 	}
 }

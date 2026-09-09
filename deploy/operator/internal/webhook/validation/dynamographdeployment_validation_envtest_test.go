@@ -1008,6 +1008,36 @@ func TestDynamoGraphDeploymentValidator_Validate(t *testing.T) {
 			}),
 		},
 		{
+			name: "frontend component cannot be multinode",
+			deployment: betaDGDForAdmission(func(dgd *nvidiacomv1beta1.DynamoGraphDeployment) {
+				dgd.Spec.Components[0].Multinode = &nvidiacomv1beta1.MultinodeSpec{NodeCount: 2}
+			}),
+			wantWebhookErrs: []string{
+				"spec.components[0].multinode: Forbidden: multinode is supported only for worker, prefill, or decode components",
+			},
+		},
+		{
+			name: "planner component cannot be multinode",
+			deployment: betaDGDForAdmission(func(dgd *nvidiacomv1beta1.DynamoGraphDeployment) {
+				dgd.Spec.Components[0].ComponentType = nvidiacomv1beta1.ComponentTypePlanner
+				dgd.Spec.Components[0].Multinode = &nvidiacomv1beta1.MultinodeSpec{NodeCount: 2}
+			}),
+			wantWebhookErrs: []string{
+				"spec.components[0].multinode: Forbidden: multinode is supported only for worker, prefill, or decode components",
+			},
+		},
+		{
+			name: "v1alpha1 frontend component cannot be multinode after conversion",
+			deployment: alphaDGDForAdmission(func(dgd *nvidiacomv1alpha1.DynamoGraphDeployment) {
+				worker := dgd.Spec.Services[dgdAdmissionWorkerName]
+				worker.ComponentType = consts.ComponentTypeFrontend
+				worker.Multinode = &nvidiacomv1alpha1.MultinodeSpec{NodeCount: 2}
+			}),
+			wantWebhookErrs: []string{
+				"spec.components[0].multinode: Forbidden: multinode is supported only for worker, prefill, or decode components",
+			},
+		},
+		{
 			name: "complete explicit multinode roles are admitted",
 			deployment: betaDGDForAdmission(func(dgd *nvidiacomv1beta1.DynamoGraphDeployment) {
 				setBetaExplicitMultinodeRoles(betaWorkerComponent(dgd), 4)
@@ -2306,6 +2336,63 @@ func TestDynamoGraphDeploymentValidator_Validate(t *testing.T) {
 		},
 
 		// Multinode updates.
+		{
+			name:               "unchanged legacy frontend multinode survives an unrelated update",
+			seedWithoutWebhook: true,
+			oldDeployment: betaDGDForAdmission(func(dgd *nvidiacomv1beta1.DynamoGraphDeployment) {
+				dgd.Spec.Components[0].Multinode = &nvidiacomv1beta1.MultinodeSpec{NodeCount: 2}
+			}),
+			deployment: betaDGDForAdmission(func(dgd *nvidiacomv1beta1.DynamoGraphDeployment) {
+				dgd.Spec.Components[0].Multinode = &nvidiacomv1beta1.MultinodeSpec{NodeCount: 2}
+				dgd.Labels = map[string]string{"updated": "true"}
+			}),
+		},
+		{
+			name:               "v1alpha1 unchanged legacy frontend multinode survives conversion and update",
+			seedWithoutWebhook: true,
+			oldDeployment: alphaDGDForAdmission(func(dgd *nvidiacomv1alpha1.DynamoGraphDeployment) {
+				worker := dgd.Spec.Services[dgdAdmissionWorkerName]
+				worker.ComponentType = consts.ComponentTypeFrontend
+				worker.Multinode = &nvidiacomv1alpha1.MultinodeSpec{NodeCount: 2}
+			}),
+			deployment: alphaDGDForAdmission(func(dgd *nvidiacomv1alpha1.DynamoGraphDeployment) {
+				worker := dgd.Spec.Services[dgdAdmissionWorkerName]
+				worker.ComponentType = consts.ComponentTypeFrontend
+				worker.Multinode = &nvidiacomv1alpha1.MultinodeSpec{NodeCount: 2}
+				dgd.Labels = map[string]string{"updated": "true"}
+			}),
+		},
+		{
+			name:               "legacy frontend multinode can be removed",
+			seedWithoutWebhook: true,
+			oldDeployment: betaDGDForAdmission(func(dgd *nvidiacomv1beta1.DynamoGraphDeployment) {
+				dgd.Spec.Components[0].Multinode = &nvidiacomv1beta1.MultinodeSpec{NodeCount: 2}
+			}),
+			deployment: betaDGDForAdmission(nil),
+		},
+		{
+			name:               "legacy frontend multinode cannot change node count",
+			seedWithoutWebhook: true,
+			oldDeployment: betaDGDForAdmission(func(dgd *nvidiacomv1beta1.DynamoGraphDeployment) {
+				dgd.Spec.Components[0].Multinode = &nvidiacomv1beta1.MultinodeSpec{NodeCount: 2}
+			}),
+			deployment: betaDGDForAdmission(func(dgd *nvidiacomv1beta1.DynamoGraphDeployment) {
+				dgd.Spec.Components[0].Multinode = &nvidiacomv1beta1.MultinodeSpec{NodeCount: 3}
+			}),
+			wantWebhookErrs: []string{
+				"spec.components[0].multinode: Forbidden: multinode is supported only for worker, prefill, or decode components",
+			},
+		},
+		{
+			name:          "removed frontend multinode cannot be reintroduced",
+			oldDeployment: betaDGDForAdmission(nil),
+			deployment: betaDGDForAdmission(func(dgd *nvidiacomv1beta1.DynamoGraphDeployment) {
+				dgd.Spec.Components[0].Multinode = &nvidiacomv1beta1.MultinodeSpec{NodeCount: 2}
+			}),
+			wantWebhookErrs: []string{
+				"spec.components[0].multinode: Forbidden: multinode is supported only for worker, prefill, or decode components",
+			},
+		},
 		{
 			name:          "single-node to multinode transition is immutable",
 			oldDeployment: newBetaDGDForValidation(),

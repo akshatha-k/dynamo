@@ -63,6 +63,7 @@ type dynamoComponentDeploymentSharedSpecValidationOptions struct {
 	validateInferencePoolAvailability bool
 	providerOverridesSupported        bool
 	workloadProvider                  string
+	oldComponent                      *nvidiacomv1beta1.DynamoComponentDeploymentSharedSpec
 }
 
 // validateDynamoComponentDeploymentSharedSpec validates spec. spec and fldPath must not be nil.
@@ -115,13 +116,9 @@ func (v *sharedValidation) validateDynamoComponentDeploymentSharedSpec(
 		))
 	}
 
-	// Restrict multinode orchestration to inference-engine components.
-	if spec.Multinode != nil && !dynamo.IsWorkerComponent(string(spec.ComponentType)) {
-		allErrs = append(allErrs, field.Forbidden(
-			fldPath.Child("multinode"),
-			"multinode is supported only for worker, prefill, or decode components",
-		))
-	}
+	// Restrict multinode orchestration to inference-engine components while
+	// allowing unrelated edits to identical legacy violations.
+	allErrs = append(allErrs, validateMultinodeComponentType(spec, options.oldComponent, fldPath.Child("multinode"))...)
 
 	if spec.ComponentType == nvidiacomv1beta1.ComponentTypeEPP {
 		if options.validateInferencePoolAvailability {
@@ -194,6 +191,51 @@ func (v *sharedValidation) validateDynamoComponentDeploymentSharedSpec(
 	}
 
 	return allErrs
+}
+
+func supportsMultinodeComponentType(componentType nvidiacomv1beta1.ComponentType) bool {
+	switch componentType {
+	case nvidiacomv1beta1.ComponentTypeWorker,
+		nvidiacomv1beta1.ComponentTypePrefill,
+		nvidiacomv1beta1.ComponentTypeDecode:
+		return true
+	default:
+		return false
+	}
+}
+
+func hasUnsupportedMultinode(spec *nvidiacomv1beta1.DynamoComponentDeploymentSharedSpec) bool {
+	return spec != nil && spec.Multinode != nil && !supportsMultinodeComponentType(spec.ComponentType)
+}
+
+// validateMultinodeComponentType rejects unsupported new combinations and
+// ratchets identical legacy violations on update. fldPath points to multinode.
+func validateMultinodeComponentType(
+	newSpec *nvidiacomv1beta1.DynamoComponentDeploymentSharedSpec,
+	oldSpec *nvidiacomv1beta1.DynamoComponentDeploymentSharedSpec,
+	fldPath *field.Path,
+) field.ErrorList {
+	if !hasUnsupportedMultinode(newSpec) {
+		return nil
+	}
+	if oldSpec != nil && oldSpec.ComponentType == newSpec.ComponentType &&
+		hasUnsupportedMultinode(oldSpec) &&
+		apiequality.Semantic.DeepEqual(oldSpec.Multinode, newSpec.Multinode) {
+		return nil
+	}
+	return field.ErrorList{field.Forbidden(
+		fldPath,
+		"multinode is supported only for worker, prefill, or decode components",
+	)}
+}
+
+func removesUnsupportedMultinode(
+	newSpec *nvidiacomv1beta1.DynamoComponentDeploymentSharedSpec,
+	oldSpec *nvidiacomv1beta1.DynamoComponentDeploymentSharedSpec,
+) bool {
+	return hasUnsupportedMultinode(oldSpec) &&
+		newSpec.Multinode == nil &&
+		newSpec.ComponentType == oldSpec.ComponentType
 }
 
 type providerOverrideValidationOptions struct {
@@ -674,13 +716,16 @@ func (v *sharedValidation) validateDynamoComponentDeploymentSharedSpecUpdate(
 		)...)
 	}
 
-	// Keep the component's multinode shape stable across updates.
+	// Keep the component's multinode shape stable across updates. Permit
+	// removing a legacy multinode value from an unsupported component type.
 	if newComponent.IsMultinode() != oldComponent.IsMultinode() {
-		allErrs = append(allErrs, field.Invalid(
-			fldPath.Child("multinode"),
-			newComponent.Multinode,
-			"cannot change node topology between single-node and multi-node after creation",
-		))
+		if !removesUnsupportedMultinode(newComponent, oldComponent) {
+			allErrs = append(allErrs, field.Invalid(
+				fldPath.Child("multinode"),
+				newComponent.Multinode,
+				"cannot change node topology between single-node and multi-node after creation",
+			))
+		}
 	} else {
 		allErrs = append(allErrs, validateComponentRolesUpdate(
 			newComponent,
