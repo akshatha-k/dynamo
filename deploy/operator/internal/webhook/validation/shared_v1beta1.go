@@ -116,8 +116,7 @@ func (v *sharedValidation) validateDynamoComponentDeploymentSharedSpec(
 		))
 	}
 
-	// Restrict multinode orchestration to inference-engine components while
-	// allowing unrelated edits to identical legacy violations.
+	// Ratchet unsupported legacy multinode combinations on update.
 	allErrs = append(allErrs, validateMultinodeComponentType(spec, options.oldComponent, fldPath.Child("multinode"))...)
 
 	if spec.ComponentType == nvidiacomv1beta1.ComponentTypeEPP {

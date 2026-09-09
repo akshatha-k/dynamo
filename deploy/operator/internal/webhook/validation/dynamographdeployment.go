@@ -729,6 +729,14 @@ func (v *dynamoGraphDeploymentValidation) validateDynamoGraphDeploymentSpecUpdat
 		if !exists {
 			continue
 		}
+
+		// Ratchet the shared multinode type contract because DGD updates skip the stateless traversal.
+		allErrs = append(allErrs, validateMultinodeComponentType(
+			newComponent,
+			oldComponent,
+			componentsPath.Index(i).Child("multinode"),
+		)...)
+
 		allErrs = append(allErrs, v.validateDynamoComponentDeploymentSharedSpecUpdate(
 			newComponent,
 			oldComponent,
