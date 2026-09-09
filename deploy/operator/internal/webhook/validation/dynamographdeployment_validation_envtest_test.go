@@ -33,6 +33,7 @@ import (
 	apivalidation "k8s.io/apimachinery/pkg/api/validation"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	k8sptr "k8s.io/utils/ptr"
 	apixv1alpha1 "sigs.k8s.io/gateway-api-inference-extension/apix/config/v1alpha1"
 )
@@ -53,22 +54,28 @@ const (
 	dgdAdmissionNodeName          = "gpu-node-0"
 	dgdAdmissionUpperWorkerName   = "WORKER"
 	dgdAdmissionPriorityClass     = "high-priority"
+	causeTypeFieldValueForbidden  = metav1.CauseType(field.ErrorTypeForbidden)
 
 	// The GPU-product power rules are asserted through their exact rendered
 	// strings, so the shared fragments are named once here.
-	powerWattsPath   = "spec.components[1].podTemplate.metadata.annotations[dynamo.nvidia.com/gpu-power-limit]"
-	powerProductPath = "spec.components[1].podTemplate.spec.nodeSelector[nvidia.com/gpu.product]"
-	powerRangeDetail = `must be between 200 and 700 watts inclusive for GPU product "NVIDIA-H100-80GB-HBM3"`
+	powerWattsPath    = "spec.components[1].podTemplate.metadata.annotations[dynamo.nvidia.com/gpu-power-limit]"
+	powerProductPath  = "spec.components[1].podTemplate.spec.nodeSelector[nvidia.com/gpu.product]"
+	powerNodeNamePath = "spec.components[1].podTemplate.spec.nodeName"
+	powerRangeDetail  = `must be between 200 and 700 watts inclusive for GPU product "NVIDIA-H100-80GB-HBM3"`
 
 	powerUnknownProductDetail = `has no reviewed GPU power range in this operator release; ` +
 		`select a GPU product with a reviewed range or remove annotation "dynamo.nvidia.com/gpu-power-limit"`
-	powerSelectorRequiredErr = powerProductPath + `: Required value: is required when annotation ` +
+	powerSelectorRequiredMessage = `Required value: is required when annotation ` +
 		`"dynamo.nvidia.com/gpu-power-limit" is set, so the requested power limit can be validated ` +
 		`against the selected GPU product`
-	powerNodeNameForbiddenErr = `spec.components[1].podTemplate.spec.nodeName: Forbidden: cannot be combined with ` +
+	powerNodeNameForbiddenMessage = `Forbidden: cannot be combined with ` +
 		`annotation "dynamo.nvidia.com/gpu-power-limit": bypassing the scheduler invalidates the GPU product ` +
 		`selected by "nvidia.com/gpu.product"`
 )
+
+func webhookCause(causeType metav1.CauseType, field, message string) metav1.StatusCause {
+	return metav1.StatusCause{Type: causeType, Field: field, Message: message}
+}
 
 const sglangBackendFramework = "sglang"
 
@@ -93,6 +100,7 @@ func TestDynamoGraphDeploymentValidator_Validate(t *testing.T) {
 		wantCELErr         string
 		wantAdmissionErrs  []string
 		wantWebhookErrs    []string
+		wantWebhookCauses  []metav1.StatusCause
 		wantWarnings       []string
 		notWantErr         string
 		wantPodAnnotations map[string]string
@@ -723,8 +731,8 @@ func TestDynamoGraphDeploymentValidator_Validate(t *testing.T) {
 				enableBetaIntraPodGMS(betaWorkerComponent(dgd))
 				setBetaWorkerPowerInputs(dgd, "300", "1", 2)
 			}),
-			wantWebhookErrs: []string{
-				`spec.components[1].experimental.gpuMemoryService: Forbidden: cannot be combined with annotation "dynamo.nvidia.com/gpu-power-limit": power-aware planning does not support DRA-backed device allocation`,
+			wantWebhookCauses: []metav1.StatusCause{
+				webhookCause(causeTypeFieldValueForbidden, `spec.components[1].experimental.gpuMemoryService`, `Forbidden: cannot be combined with annotation "dynamo.nvidia.com/gpu-power-limit": power-aware planning does not support DRA-backed device allocation`),
 			},
 		},
 		{
@@ -733,8 +741,8 @@ func TestDynamoGraphDeploymentValidator_Validate(t *testing.T) {
 				enableBetaInterPodGMS(betaWorkerComponent(dgd))
 				setBetaWorkerPowerInputs(dgd, "300", "1", 2)
 			}),
-			wantWebhookErrs: []string{
-				`spec.components[1].experimental.gpuMemoryService: Forbidden: cannot be combined with annotation "dynamo.nvidia.com/gpu-power-limit": power-aware planning does not support DRA-backed device allocation`,
+			wantWebhookCauses: []metav1.StatusCause{
+				webhookCause(causeTypeFieldValueForbidden, `spec.components[1].experimental.gpuMemoryService`, `Forbidden: cannot be combined with annotation "dynamo.nvidia.com/gpu-power-limit": power-aware planning does not support DRA-backed device allocation`),
 			},
 		},
 		{
@@ -746,8 +754,8 @@ func TestDynamoGraphDeploymentValidator_Validate(t *testing.T) {
 					ResourceClaimTemplateName: k8sptr.To("gpu-template"),
 				})
 			}),
-			wantWebhookErrs: []string{
-				`spec.components[1].podTemplate.spec.containers[0].resources.claims: Forbidden: cannot be combined with annotation "dynamo.nvidia.com/gpu-power-limit": power-aware planning does not support DRA-backed device allocation`,
+			wantWebhookCauses: []metav1.StatusCause{
+				webhookCause(causeTypeFieldValueForbidden, `spec.components[1].podTemplate.spec.containers[0].resources.claims`, `Forbidden: cannot be combined with annotation "dynamo.nvidia.com/gpu-power-limit": power-aware planning does not support DRA-backed device allocation`),
 			},
 		},
 		{
@@ -759,8 +767,8 @@ func TestDynamoGraphDeploymentValidator_Validate(t *testing.T) {
 					ResourceClaimName: k8sptr.To("gpu-claim"),
 				})
 			}),
-			wantWebhookErrs: []string{
-				`spec.components[1].podTemplate.spec.containers[0].resources.claims: Forbidden: cannot be combined with annotation "dynamo.nvidia.com/gpu-power-limit": power-aware planning does not support DRA-backed device allocation`,
+			wantWebhookCauses: []metav1.StatusCause{
+				webhookCause(causeTypeFieldValueForbidden, `spec.components[1].podTemplate.spec.containers[0].resources.claims`, `Forbidden: cannot be combined with annotation "dynamo.nvidia.com/gpu-power-limit": power-aware planning does not support DRA-backed device allocation`),
 			},
 		},
 		{
@@ -777,8 +785,8 @@ func TestDynamoGraphDeploymentValidator_Validate(t *testing.T) {
 			deployment: betaDGDForAdmission(func(dgd *nvidiacomv1beta1.DynamoGraphDeployment) {
 				setBetaWorkerPowerInputs(dgd, "0", "1", 2)
 			}),
-			wantWebhookErrs: []string{
-				`spec.components[1].podTemplate.metadata.annotations[dynamo.nvidia.com/gpu-power-limit]: Invalid value: "0": must be greater than zero`,
+			wantWebhookCauses: []metav1.StatusCause{
+				webhookCause(metav1.CauseTypeFieldValueInvalid, powerWattsPath, `Invalid value: "0": must be greater than zero`),
 			},
 		},
 		{
@@ -786,8 +794,8 @@ func TestDynamoGraphDeploymentValidator_Validate(t *testing.T) {
 			deployment: betaDGDForAdmission(func(dgd *nvidiacomv1beta1.DynamoGraphDeployment) {
 				setBetaWorkerPowerInputs(dgd, "-300", "1", 2)
 			}),
-			wantWebhookErrs: []string{
-				`spec.components[1].podTemplate.metadata.annotations[dynamo.nvidia.com/gpu-power-limit]: Invalid value: "-300": must be greater than zero`,
+			wantWebhookCauses: []metav1.StatusCause{
+				webhookCause(metav1.CauseTypeFieldValueInvalid, powerWattsPath, `Invalid value: "-300": must be greater than zero`),
 			},
 		},
 		{
@@ -795,8 +803,8 @@ func TestDynamoGraphDeploymentValidator_Validate(t *testing.T) {
 			deployment: betaDGDForAdmission(func(dgd *nvidiacomv1beta1.DynamoGraphDeployment) {
 				setBetaWorkerPowerInputs(dgd, "300W", "1", 2)
 			}),
-			wantWebhookErrs: []string{
-				`spec.components[1].podTemplate.metadata.annotations[dynamo.nvidia.com/gpu-power-limit]: Invalid value: "300W": must be a decimal integer`,
+			wantWebhookCauses: []metav1.StatusCause{
+				webhookCause(metav1.CauseTypeFieldValueInvalid, powerWattsPath, `Invalid value: "300W": must be a decimal integer`),
 			},
 		},
 		{
@@ -817,13 +825,19 @@ func TestDynamoGraphDeploymentValidator_Validate(t *testing.T) {
 					{Name: "gpu", ResourceClaimTemplateName: k8sptr.To("gpu-template")},
 				}
 			}),
-			wantWebhookErrs: []string{
-				`spec.components[1].podTemplate.spec.initContainers[0].resources.claims: Forbidden: cannot be combined with annotation "dynamo.nvidia.com/gpu-power-limit": power-aware planning does not support DRA-backed device allocation`,
+			wantWebhookCauses: []metav1.StatusCause{
+				webhookCause(causeTypeFieldValueForbidden, `spec.components[1].podTemplate.spec.initContainers[0].resources.claims`, `Forbidden: cannot be combined with annotation "dynamo.nvidia.com/gpu-power-limit": power-aware planning does not support DRA-backed device allocation`),
 			},
 		},
 		{
 			name: "v1beta1 power annotation cannot be added to a DRA component",
 			oldDeployment: betaDGDForAdmission(func(dgd *nvidiacomv1beta1.DynamoGraphDeployment) {
+				worker := betaWorkerComponent(dgd)
+				worker.Multinode = &nvidiacomv1beta1.MultinodeSpec{NodeCount: 2}
+				worker.PodTemplate.Spec.NodeSelector = map[string]string{dgdAdmissionGPUProductLabel: dgdAdmissionGPUProduct}
+				worker.PodTemplate.Spec.Containers[0].Resources.Limits = corev1.ResourceList{
+					corev1.ResourceName(consts.KubeResourceGPUNvidia): resource.MustParse("1"),
+				}
 				setBetaWorkerResourceClaim(dgd, corev1.PodResourceClaim{
 					Name:                      "device",
 					ResourceClaimTemplateName: k8sptr.To("device-template"),
@@ -836,8 +850,9 @@ func TestDynamoGraphDeploymentValidator_Validate(t *testing.T) {
 					ResourceClaimTemplateName: k8sptr.To("device-template"),
 				})
 			}),
-			wantWebhookErrs: []string{
-				`spec.components[1].podTemplate.spec.containers[0].resources.claims: Forbidden: cannot be combined with annotation "dynamo.nvidia.com/gpu-power-limit": power-aware planning does not support DRA-backed device allocation`,
+			wantWebhookCauses: []metav1.StatusCause{
+				webhookCause(causeTypeFieldValueForbidden, `spec.components[1].podTemplate.spec.containers[0].resources.claims`, `Forbidden: cannot be combined with annotation "dynamo.nvidia.com/gpu-power-limit": power-aware planning does not support DRA-backed device allocation`),
+				webhookCause(metav1.CauseTypeFieldValueInvalid, powerWattsPath, `Invalid value: "300": `+apivalidation.FieldImmutableErrorMsg),
 			},
 		},
 		{
@@ -848,8 +863,8 @@ func TestDynamoGraphDeploymentValidator_Validate(t *testing.T) {
 			deployment: betaDGDForAdmission(func(dgd *nvidiacomv1beta1.DynamoGraphDeployment) {
 				setBetaWorkerPowerInputs(dgd, "350", "1", 2)
 			}),
-			wantWebhookErrs: []string{
-				`spec.components[1].podTemplate.metadata.annotations[dynamo.nvidia.com/gpu-power-limit]: Invalid value: "350": ` + apivalidation.FieldImmutableErrorMsg,
+			wantWebhookCauses: []metav1.StatusCause{
+				webhookCause(metav1.CauseTypeFieldValueInvalid, powerWattsPath, `Invalid value: "350": `+apivalidation.FieldImmutableErrorMsg),
 			},
 		},
 		{
@@ -861,8 +876,8 @@ func TestDynamoGraphDeploymentValidator_Validate(t *testing.T) {
 			deployment: betaDGDForAdmission(func(dgd *nvidiacomv1beta1.DynamoGraphDeployment) {
 				setBetaWorkerPowerInputs(dgd, "300", "1", 2)
 			}),
-			wantWebhookErrs: []string{
-				`spec.components[1].podTemplate.metadata.annotations[dynamo.nvidia.com/gpu-power-limit]: Invalid value: "300": ` + apivalidation.FieldImmutableErrorMsg,
+			wantWebhookCauses: []metav1.StatusCause{
+				webhookCause(metav1.CauseTypeFieldValueInvalid, powerWattsPath, `Invalid value: "300": `+apivalidation.FieldImmutableErrorMsg),
 			},
 		},
 		{
@@ -874,8 +889,8 @@ func TestDynamoGraphDeploymentValidator_Validate(t *testing.T) {
 				setBetaWorkerPowerInputs(dgd, "300", "1", 2)
 				delete(betaWorkerComponent(dgd).PodTemplate.Annotations, consts.KubeAnnotationGPUPowerLimit)
 			}),
-			wantWebhookErrs: []string{
-				"spec.components[1].podTemplate.metadata.annotations[dynamo.nvidia.com/gpu-power-limit]: Invalid value: null: " + apivalidation.FieldImmutableErrorMsg,
+			wantWebhookCauses: []metav1.StatusCause{
+				webhookCause(metav1.CauseTypeFieldValueInvalid, powerWattsPath, `Invalid value: null: `+apivalidation.FieldImmutableErrorMsg),
 			},
 		},
 		{
@@ -886,8 +901,8 @@ func TestDynamoGraphDeploymentValidator_Validate(t *testing.T) {
 			deployment: betaDGDForAdmission(func(dgd *nvidiacomv1beta1.DynamoGraphDeployment) {
 				setBetaWorkerPowerInputs(dgd, "300", "2", 2)
 			}),
-			wantWebhookErrs: []string{
-				`spec.components[1].podTemplate.spec.containers[0].resources.limits[nvidia.com/gpu]: Invalid value: "2": ` + apivalidation.FieldImmutableErrorMsg,
+			wantWebhookCauses: []metav1.StatusCause{
+				webhookCause(metav1.CauseTypeFieldValueInvalid, `spec.components[1].podTemplate.spec.containers[0].resources.limits[nvidia.com/gpu]`, `Invalid value: "2": `+apivalidation.FieldImmutableErrorMsg),
 			},
 		},
 		{
@@ -910,8 +925,8 @@ func TestDynamoGraphDeploymentValidator_Validate(t *testing.T) {
 			deployment: betaDGDForAdmission(func(dgd *nvidiacomv1beta1.DynamoGraphDeployment) {
 				setBetaWorkerPowerInputs(dgd, "300", "1", 3)
 			}),
-			wantWebhookErrs: []string{
-				"spec.components[1].multinode.nodeCount: Invalid value: 3: " + apivalidation.FieldImmutableErrorMsg,
+			wantWebhookCauses: []metav1.StatusCause{
+				webhookCause(metav1.CauseTypeFieldValueInvalid, `spec.components[1].multinode.nodeCount`, `Invalid value: 3: `+apivalidation.FieldImmutableErrorMsg),
 			},
 		},
 		{
@@ -943,8 +958,8 @@ func TestDynamoGraphDeploymentValidator_Validate(t *testing.T) {
 			deployment: alphaDGDForAdmission(func(dgd *nvidiacomv1alpha1.DynamoGraphDeployment) {
 				setAlphaWorkerPowerInputs(dgd, "350", "1", 2)
 			}),
-			wantWebhookErrs: []string{
-				`spec.components[0].podTemplate.metadata.annotations[dynamo.nvidia.com/gpu-power-limit]: Invalid value: "350": ` + apivalidation.FieldImmutableErrorMsg,
+			wantWebhookCauses: []metav1.StatusCause{
+				webhookCause(metav1.CauseTypeFieldValueInvalid, `spec.components[0].podTemplate.metadata.annotations[dynamo.nvidia.com/gpu-power-limit]`, `Invalid value: "350": `+apivalidation.FieldImmutableErrorMsg),
 			},
 		},
 		{
@@ -956,8 +971,8 @@ func TestDynamoGraphDeploymentValidator_Validate(t *testing.T) {
 					Mode:    nvidiacomv1alpha1.GMSModeIntraPod,
 				}
 			}),
-			wantWebhookErrs: []string{
-				`spec.components[0].experimental.gpuMemoryService: Forbidden: cannot be combined with annotation "dynamo.nvidia.com/gpu-power-limit": power-aware planning does not support DRA-backed device allocation`,
+			wantWebhookCauses: []metav1.StatusCause{
+				webhookCause(causeTypeFieldValueForbidden, `spec.components[0].experimental.gpuMemoryService`, `Forbidden: cannot be combined with annotation "dynamo.nvidia.com/gpu-power-limit": power-aware planning does not support DRA-backed device allocation`),
 			},
 		},
 		{
@@ -968,8 +983,8 @@ func TestDynamoGraphDeploymentValidator_Validate(t *testing.T) {
 			deployment: alphaDGDForAdmission(func(dgd *nvidiacomv1alpha1.DynamoGraphDeployment) {
 				setAlphaWorkerPowerInputs(dgd, "300", "2", 2)
 			}),
-			wantWebhookErrs: []string{
-				`spec.components[0].podTemplate.spec.containers[0].resources.limits[nvidia.com/gpu]: Invalid value: "2": ` + apivalidation.FieldImmutableErrorMsg,
+			wantWebhookCauses: []metav1.StatusCause{
+				webhookCause(metav1.CauseTypeFieldValueInvalid, `spec.components[0].podTemplate.spec.containers[0].resources.limits[nvidia.com/gpu]`, `Invalid value: "2": `+apivalidation.FieldImmutableErrorMsg),
 			},
 		},
 		{
@@ -980,8 +995,8 @@ func TestDynamoGraphDeploymentValidator_Validate(t *testing.T) {
 			deployment: alphaDGDForAdmission(func(dgd *nvidiacomv1alpha1.DynamoGraphDeployment) {
 				setAlphaWorkerPowerInputs(dgd, "300", "1", 3)
 			}),
-			wantWebhookErrs: []string{
-				"spec.components[0].multinode.nodeCount: Invalid value: 3: " + apivalidation.FieldImmutableErrorMsg,
+			wantWebhookCauses: []metav1.StatusCause{
+				webhookCause(metav1.CauseTypeFieldValueInvalid, `spec.components[0].multinode.nodeCount`, `Invalid value: 3: `+apivalidation.FieldImmutableErrorMsg),
 			},
 		},
 		{
@@ -1003,8 +1018,8 @@ func TestDynamoGraphDeploymentValidator_Validate(t *testing.T) {
 			deployment: betaDGDForAdmission(func(dgd *nvidiacomv1beta1.DynamoGraphDeployment) {
 				setBetaWorkerPowerInputs(dgd, "199", "1", 2)
 			}),
-			wantWebhookErrs: []string{
-				powerWattsPath + `: Invalid value: "199": ` + powerRangeDetail,
+			wantWebhookCauses: []metav1.StatusCause{
+				webhookCause(metav1.CauseTypeFieldValueInvalid, powerWattsPath, `Invalid value: "199": `+powerRangeDetail),
 			},
 		},
 		{
@@ -1024,8 +1039,8 @@ func TestDynamoGraphDeploymentValidator_Validate(t *testing.T) {
 			deployment: betaDGDForAdmission(func(dgd *nvidiacomv1beta1.DynamoGraphDeployment) {
 				setBetaWorkerPowerInputs(dgd, "701", "1", 2)
 			}),
-			wantWebhookErrs: []string{
-				powerWattsPath + `: Invalid value: "701": ` + powerRangeDetail,
+			wantWebhookCauses: []metav1.StatusCause{
+				webhookCause(metav1.CauseTypeFieldValueInvalid, powerWattsPath, `Invalid value: "701": `+powerRangeDetail),
 			},
 		},
 		{
@@ -1034,7 +1049,7 @@ func TestDynamoGraphDeploymentValidator_Validate(t *testing.T) {
 				setBetaWorkerPowerInputs(dgd, "300", "1", 2)
 				betaWorkerComponent(dgd).PodTemplate.Spec.NodeSelector = nil
 			}),
-			wantWebhookErrs: []string{powerSelectorRequiredErr},
+			wantWebhookCauses: []metav1.StatusCause{webhookCause(metav1.CauseTypeFieldValueRequired, powerProductPath, powerSelectorRequiredMessage)},
 		},
 		{
 			name: "v1beta1 power annotation with an empty product selector is rejected on create",
@@ -1042,7 +1057,7 @@ func TestDynamoGraphDeploymentValidator_Validate(t *testing.T) {
 				setBetaWorkerPowerInputs(dgd, "300", "1", 2)
 				betaWorkerComponent(dgd).PodTemplate.Spec.NodeSelector[dgdAdmissionGPUProductLabel] = ""
 			}),
-			wantWebhookErrs: []string{powerSelectorRequiredErr},
+			wantWebhookCauses: []metav1.StatusCause{webhookCause(metav1.CauseTypeFieldValueRequired, powerProductPath, powerSelectorRequiredMessage)},
 		},
 		{
 			name: "v1beta1 power annotation with an uncatalogued product selector is rejected on create",
@@ -1050,8 +1065,8 @@ func TestDynamoGraphDeploymentValidator_Validate(t *testing.T) {
 				setBetaWorkerPowerInputs(dgd, "300", "1", 2)
 				betaWorkerComponent(dgd).PodTemplate.Spec.NodeSelector[dgdAdmissionGPUProductLabel] = dgdAdmissionUnknownGPUProduct
 			}),
-			wantWebhookErrs: []string{
-				powerProductPath + `: Invalid value: "` + dgdAdmissionUnknownGPUProduct + `": ` + powerUnknownProductDetail,
+			wantWebhookCauses: []metav1.StatusCause{
+				webhookCause(metav1.CauseTypeFieldValueInvalid, powerProductPath, `Invalid value: "`+dgdAdmissionUnknownGPUProduct+`": `+powerUnknownProductDetail),
 			},
 		},
 		{
@@ -1060,15 +1075,15 @@ func TestDynamoGraphDeploymentValidator_Validate(t *testing.T) {
 				setBetaWorkerPowerInputs(dgd, "300", "1", 2)
 				betaWorkerComponent(dgd).PodTemplate.Spec.NodeName = dgdAdmissionNodeName
 			}),
-			wantWebhookErrs: []string{powerNodeNameForbiddenErr},
+			wantWebhookCauses: []metav1.StatusCause{webhookCause(causeTypeFieldValueForbidden, powerNodeNamePath, powerNodeNameForbiddenMessage)},
 		},
 		{
 			name: "v1alpha1 out-of-range power annotation is rejected against the converted product selector",
 			deployment: alphaDGDForAdmission(func(dgd *nvidiacomv1alpha1.DynamoGraphDeployment) {
 				setAlphaWorkerPowerInputs(dgd, "701", "1", 2)
 			}),
-			wantWebhookErrs: []string{
-				`spec.components[0].podTemplate.metadata.annotations[dynamo.nvidia.com/gpu-power-limit]: Invalid value: "701": ` + powerRangeDetail,
+			wantWebhookCauses: []metav1.StatusCause{
+				webhookCause(metav1.CauseTypeFieldValueInvalid, `spec.components[0].podTemplate.metadata.annotations[dynamo.nvidia.com/gpu-power-limit]`, `Invalid value: "701": `+powerRangeDetail),
 			},
 		},
 
@@ -1082,12 +1097,12 @@ func TestDynamoGraphDeploymentValidator_Validate(t *testing.T) {
 				setBetaWorkerPowerInputs(dgd, "300", "1", 2)
 				betaWorkerComponent(dgd).PodTemplate.Spec.NodeSelector[dgdAdmissionGPUProductLabel] = dgdAdmissionOtherGPUProduct
 			}),
-			wantWebhookErrs: []string{
-				powerProductPath + `: Invalid value: "` + dgdAdmissionOtherGPUProduct + `": ` + apivalidation.FieldImmutableErrorMsg,
+			wantWebhookCauses: []metav1.StatusCause{
+				webhookCause(metav1.CauseTypeFieldValueInvalid, powerProductPath, `Invalid value: "`+dgdAdmissionOtherGPUProduct+`": `+apivalidation.FieldImmutableErrorMsg),
 			},
 		},
 		{
-			name: "v1beta1 product selector removal is rejected by the create rules on rollback",
+			name: "v1beta1 product selector removal aggregates immutability and product errors",
 			oldDeployment: betaDGDForAdmission(func(dgd *nvidiacomv1beta1.DynamoGraphDeployment) {
 				setBetaWorkerPowerInputs(dgd, "300", "1", 2)
 			}),
@@ -1095,7 +1110,10 @@ func TestDynamoGraphDeploymentValidator_Validate(t *testing.T) {
 				setBetaWorkerPowerInputs(dgd, "300", "1", 2)
 				betaWorkerComponent(dgd).PodTemplate.Spec.NodeSelector = nil
 			}),
-			wantWebhookErrs: []string{powerSelectorRequiredErr},
+			wantWebhookCauses: []metav1.StatusCause{
+				webhookCause(metav1.CauseTypeFieldValueInvalid, powerProductPath, `Invalid value: null: `+apivalidation.FieldImmutableErrorMsg),
+				webhookCause(metav1.CauseTypeFieldValueRequired, powerProductPath, powerSelectorRequiredMessage),
+			},
 		},
 
 		// GPU-product power rules: the legacy ratchet. A legacy component carries a
@@ -1155,12 +1173,12 @@ func TestDynamoGraphDeploymentValidator_Validate(t *testing.T) {
 			deployment: betaDGDForAdmission(func(dgd *nvidiacomv1beta1.DynamoGraphDeployment) {
 				setBetaWorkerPowerInputs(dgd, "300", "1", 2)
 			}),
-			wantWebhookErrs: []string{
-				powerProductPath + `: Invalid value: "` + dgdAdmissionGPUProduct + `": ` + apivalidation.FieldImmutableErrorMsg,
+			wantWebhookCauses: []metav1.StatusCause{
+				webhookCause(metav1.CauseTypeFieldValueInvalid, powerProductPath, `Invalid value: "`+dgdAdmissionGPUProduct+`": `+apivalidation.FieldImmutableErrorMsg),
 			},
 		},
 		{
-			name:               "legacy power component gaining an uncatalogued product selector is rejected on the create path",
+			name:               "legacy power component gaining an uncatalogued product selector aggregates both errors",
 			seedWithoutWebhook: true,
 			oldDeployment:      betaLegacyPowerDGD(nil),
 			deployment: betaLegacyPowerDGD(func(dgd *nvidiacomv1beta1.DynamoGraphDeployment) {
@@ -1168,18 +1186,22 @@ func TestDynamoGraphDeploymentValidator_Validate(t *testing.T) {
 					dgdAdmissionGPUProductLabel: dgdAdmissionUnknownGPUProduct,
 				}
 			}),
-			wantWebhookErrs: []string{
-				powerProductPath + `: Invalid value: "` + dgdAdmissionUnknownGPUProduct + `": ` + powerUnknownProductDetail,
+			wantWebhookCauses: []metav1.StatusCause{
+				webhookCause(metav1.CauseTypeFieldValueInvalid, powerProductPath, `Invalid value: "`+dgdAdmissionUnknownGPUProduct+`": `+apivalidation.FieldImmutableErrorMsg),
+				webhookCause(metav1.CauseTypeFieldValueInvalid, powerProductPath, `Invalid value: "`+dgdAdmissionUnknownGPUProduct+`": `+powerUnknownProductDetail),
 			},
 		},
 		{
-			name:               "legacy power component gaining a nodeName aggregates both create-path errors",
+			name:               "legacy power component gaining a nodeName aggregates both product errors",
 			seedWithoutWebhook: true,
 			oldDeployment:      betaLegacyPowerDGD(nil),
 			deployment: betaLegacyPowerDGD(func(dgd *nvidiacomv1beta1.DynamoGraphDeployment) {
 				betaWorkerComponent(dgd).PodTemplate.Spec.NodeName = dgdAdmissionNodeName
 			}),
-			wantWebhookErrs: []string{powerSelectorRequiredErr, powerNodeNameForbiddenErr},
+			wantWebhookCauses: []metav1.StatusCause{
+				webhookCause(metav1.CauseTypeFieldValueRequired, powerProductPath, powerSelectorRequiredMessage),
+				webhookCause(causeTypeFieldValueForbidden, powerNodeNamePath, powerNodeNameForbiddenMessage),
+			},
 		},
 		{
 			name:               "legacy power component changing an unrelated selector key breaks the ratchet",
@@ -1194,7 +1216,7 @@ func TestDynamoGraphDeploymentValidator_Validate(t *testing.T) {
 					dgdAdmissionGPUFamilyLabel: dgdAdmissionOtherGPUProduct,
 				}
 			}),
-			wantWebhookErrs: []string{powerSelectorRequiredErr},
+			wantWebhookCauses: []metav1.StatusCause{webhookCause(metav1.CauseTypeFieldValueRequired, powerProductPath, powerSelectorRequiredMessage)},
 		},
 		{
 			name:               "legacy power component gaining affinity breaks the ratchet",
@@ -1203,7 +1225,7 @@ func TestDynamoGraphDeploymentValidator_Validate(t *testing.T) {
 			deployment: betaLegacyPowerDGD(func(dgd *nvidiacomv1beta1.DynamoGraphDeployment) {
 				betaWorkerComponent(dgd).PodTemplate.Spec.Affinity = gpuProductNodeAffinity(dgdAdmissionGPUProduct)
 			}),
-			wantWebhookErrs: []string{powerSelectorRequiredErr},
+			wantWebhookCauses: []metav1.StatusCause{webhookCause(metav1.CauseTypeFieldValueRequired, powerProductPath, powerSelectorRequiredMessage)},
 		},
 		{
 			name:               "legacy power component gaining an empty product selector key breaks the ratchet",
@@ -1214,7 +1236,7 @@ func TestDynamoGraphDeploymentValidator_Validate(t *testing.T) {
 					dgdAdmissionGPUProductLabel: "",
 				}
 			}),
-			wantWebhookErrs: []string{powerSelectorRequiredErr},
+			wantWebhookCauses: []metav1.StatusCause{webhookCause(metav1.CauseTypeFieldValueRequired, powerProductPath, powerSelectorRequiredMessage)},
 		},
 		{
 			name:               "legacy power component losing an empty product selector key breaks the ratchet",
@@ -1224,8 +1246,8 @@ func TestDynamoGraphDeploymentValidator_Validate(t *testing.T) {
 					dgdAdmissionGPUProductLabel: "",
 				}
 			}),
-			deployment:      betaLegacyPowerDGD(nil),
-			wantWebhookErrs: []string{powerSelectorRequiredErr},
+			deployment:        betaLegacyPowerDGD(nil),
+			wantWebhookCauses: []metav1.StatusCause{webhookCause(metav1.CauseTypeFieldValueRequired, powerProductPath, powerSelectorRequiredMessage)},
 		},
 		{
 			name:               "the ratchet does not suppress an unchanged malformed power cap",
@@ -1238,8 +1260,8 @@ func TestDynamoGraphDeploymentValidator_Validate(t *testing.T) {
 				worker.PodTemplate.Annotations[consts.KubeAnnotationGPUPowerLimit] = "300W"
 				worker.Replicas = k8sptr.To(int32(3))
 			}),
-			wantWebhookErrs: []string{
-				powerWattsPath + `: Invalid value: "300W": must be a decimal integer`,
+			wantWebhookCauses: []metav1.StatusCause{
+				webhookCause(metav1.CauseTypeFieldValueInvalid, powerWattsPath, `Invalid value: "300W": must be a decimal integer`),
 			},
 		},
 		{
@@ -1258,21 +1280,21 @@ func TestDynamoGraphDeploymentValidator_Validate(t *testing.T) {
 				})
 				betaWorkerComponent(dgd).Replicas = k8sptr.To(int32(3))
 			}),
-			wantWebhookErrs: []string{
-				`spec.components[1].podTemplate.spec.containers[0].resources.claims: Forbidden: cannot be combined with annotation "dynamo.nvidia.com/gpu-power-limit": power-aware planning does not support DRA-backed device allocation`,
+			wantWebhookCauses: []metav1.StatusCause{
+				webhookCause(causeTypeFieldValueForbidden, `spec.components[1].podTemplate.spec.containers[0].resources.claims`, `Forbidden: cannot be combined with annotation "dynamo.nvidia.com/gpu-power-limit": power-aware planning does not support DRA-backed device allocation`),
 			},
 		},
 		{
-			name:               "a watt change on a legacy power component is rejected by the create rules",
+			name:               "a watt change on a legacy power component aggregates both errors",
 			seedWithoutWebhook: true,
 			oldDeployment:      betaLegacyPowerDGD(nil),
 			deployment: betaLegacyPowerDGD(func(dgd *nvidiacomv1beta1.DynamoGraphDeployment) {
 				betaWorkerComponent(dgd).PodTemplate.Annotations[consts.KubeAnnotationGPUPowerLimit] = "350"
 			}),
-			// The handler short-circuits after the stateless traversal, so the
-			// create-path error is returned instead of the annotation-immutability
-			// error the update validator would also have produced.
-			wantWebhookErrs: []string{powerSelectorRequiredErr},
+			wantWebhookCauses: []metav1.StatusCause{
+				webhookCause(metav1.CauseTypeFieldValueInvalid, powerWattsPath, `Invalid value: "350": `+apivalidation.FieldImmutableErrorMsg),
+				webhookCause(metav1.CauseTypeFieldValueRequired, powerProductPath, powerSelectorRequiredMessage),
+			},
 		},
 
 		// GPU-product power rules must be unreachable without the power annotation.
@@ -2623,6 +2645,25 @@ func TestDynamoGraphDeploymentValidator_Validate(t *testing.T) {
 			notWantErr:      "do-not-leak-this-value",
 		},
 		{
+			name:          "newly added power component aggregates topology and product errors",
+			oldDeployment: newBetaDGDForValidation(),
+			deployment: betaDGDWithSpec(func(spec *nvidiacomv1beta1.DynamoGraphDeploymentSpec) {
+				spec.Components = append(spec.Components, nvidiacomv1beta1.DynamoComponentDeploymentSharedSpec{
+					ComponentName:          "extra",
+					Replicas:               k8sptr.To(int32(1)),
+					RuntimeVersionOverride: "1.1.0",
+					PodTemplate: &corev1.PodTemplateSpec{
+						ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{consts.KubeAnnotationGPUPowerLimit: "300"}},
+						Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: consts.MainContainerName, Image: "registry.example/runtime:1.1.0"}}},
+					},
+				})
+			}),
+			wantWebhookCauses: []metav1.StatusCause{
+				webhookCause(causeTypeFieldValueForbidden, "spec.components", "Forbidden: component topology is immutable and cannot be modified after creation: components added: [extra]"),
+				webhookCause(metav1.CauseTypeFieldValueRequired, "spec.components[2].podTemplate.spec.nodeSelector[nvidia.com/gpu.product]", powerSelectorRequiredMessage),
+			},
+		},
+		{
 			name:          "component removal is immutable",
 			oldDeployment: newBetaDGDForValidation(),
 			deployment: betaDGDWithSpec(func(spec *nvidiacomv1beta1.DynamoGraphDeploymentSpec) {
@@ -3146,6 +3187,7 @@ func TestDynamoGraphDeploymentValidator_Validate(t *testing.T) {
 				wantCELError:       tt.wantCELErr,
 				wantAdmissionErrs:  tt.wantAdmissionErrs,
 				wantWebhookErrors:  tt.wantWebhookErrs,
+				wantWebhookCauses:  tt.wantWebhookCauses,
 				wantWarnings:       tt.wantWarnings,
 				notWantError:       tt.notWantErr,
 			}

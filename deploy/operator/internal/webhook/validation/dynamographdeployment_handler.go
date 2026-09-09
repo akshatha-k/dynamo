@@ -101,12 +101,6 @@ func (h *DynamoGraphDeploymentHandler) ValidateUpdate(
 	// Create validator with manager for API group detection and perform validation.
 	validator := NewDynamoGraphDeploymentValidator(h.mgr)
 	runtimeVersionSource := runtimeVersionValidationSourceForRequest(ctx, nvidiacomv1beta1.DynamoGraphDeploymentGVK)
-	// Run the stateless traversal against the new object, passing the stored
-	// object so net-new rules can ratchet an unchanged pre-existing violation.
-	warnings, err := validator.validate(ctx, newObj, oldObj, runtimeVersionSource, true)
-	if err != nil {
-		return warnings, err
-	}
 
 	// Get user info from admission request context for identity-based validation
 	var userInfo *authenticationv1.UserInfo
@@ -118,8 +112,8 @@ func (h *DynamoGraphDeploymentHandler) ValidateUpdate(
 		userInfo = &req.UserInfo
 	}
 
-	// Validate stateful rules (immutability + replicas protection)
-	updateWarnings, err := validator.ValidateUpdate(
+	// Run the complete new-state and update validation flow once.
+	warnings, err := validator.ValidateUpdate(
 		ctx,
 		oldObj,
 		newObj,
@@ -133,10 +127,8 @@ func (h *DynamoGraphDeploymentHandler) ValidateUpdate(
 			username = userInfo.Username
 		}
 		logger.Info("validation failed", "error", err.Error(), "user", username)
-		return updateWarnings, err
+		return warnings, err
 	}
-	// Combine warnings
-	warnings = append(warnings, updateWarnings...)
 	return warnings, nil
 }
 
