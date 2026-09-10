@@ -1,38 +1,9 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Bidirectional ZMQ liveness for multi-node tensor-parallel cohorts.
-
-Motivation
-----------
-When a rank>0 worker on another node dies, the leader (rank 0) only learns via the
-engine's NCCL collective timeout — 600s by default, ~20s even when tuned down — and
-in-flight requests stall for that whole window. The flock-based GMS failover only
-covers rank-0 death (the OS releases the flock on the leader's exit); it does not see
-a remote worker die.
-
-This module adds a *GPU-independent* liveness channel. Each worker rank holds a ZMQ
-connection to a leader-side monitor and sends a heartbeat on a plain CPU thread. The
-leader acknowledges each heartbeat. Loss in either direction therefore fires within one
-heartbeat timeout: the leader fences a dead worker, while a surviving worker fences its
-orphaned local cohort when rank 0 dies. Both paths release pod-local ownership so the
-complete warm-shadow TP cohort can take over without waiting for the NCCL timeout.
-
-Two properties make this better than both the NFS-flock idea and the NCCL timeout:
-  * The heartbeat runs on a CPU thread, so it keeps beating even while the GPU is busy
-    in a long legitimate collective (warmup, load spike) — it does NOT false-positive
-    the way an aggressive NCCL/engine watchdog does during init.
-  * A peer process exit drops the heartbeat promptly, so a *crash* is detected in
-    ~one interval rather than ~one collective-timeout.
-
-It does NOT replace the NCCL/engine watchdog: a rank that is hung-but-alive with its
-heartbeat thread still running is invisible here (only a timeout catches a true hang).
-This is the crash detector; the (dynamically-lowered) engine watchdog stays the hang
-detector.
-
-Reuses pyzmq, already a dependency of both vLLM and SGLang. Engine-agnostic: the
-leader supplies an ``on_rank_lost`` callback that wires into the existing failover
-trigger (fence children + release the failover lock).
+"""CPU heartbeats detect tensor-parallel peer crashes without mistaking GPU
+collective stalls for failures. The engine watchdog remains responsible for
+detecting ranks that are hung while their heartbeat threads are still alive.
 """
 
 from __future__ import annotations
@@ -275,11 +246,7 @@ class RankLivenessMonitor:
             target=self._run, name="gms-rank-liveness-monitor", daemon=True
         )
         self._thread.start()
-        # Wait for the socket bind to actually happen. Previously start() logged
-        # "bound" and returned while the real sock.bind() ran later in the thread
-        # with no error handling, so a bind failure (e.g. two replicas on the
-        # same default port) silently killed the monitor while logs claimed it
-        # was armed -- leaving the replica with no fast crash detection.
+        # Report ready only after bind succeeds; propagate bind failures.
         if not self._bind_ready.wait(timeout=5.0):
             raise RuntimeError(
                 f"[GMS liveness] monitor bind to {self._bind_addr} timed out"

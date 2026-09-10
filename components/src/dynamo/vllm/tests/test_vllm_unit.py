@@ -372,6 +372,40 @@ def test_headless_namespace_has_required_fields(mock_vllm_cli):
     assert hasattr(ns, "tensor_parallel_size")
 
 
+def test_headless_rank_liveness_terminates_when_leader_is_lost(monkeypatch):
+    import signal
+
+    from dynamo.common import rank_liveness as rl
+    from dynamo.vllm import headless
+
+    clients = []
+
+    class Client:
+        def __init__(self, leader_host, rank, *, on_leader_lost):
+            self.leader_host = leader_host
+            self.rank = rank
+            self.on_leader_lost = on_leader_lost
+            clients.append(self)
+
+        def start(self):
+            return None
+
+    kills = []
+    monkeypatch.setattr(rl, "liveness_enabled", lambda: True)
+    monkeypatch.setattr(rl, "RankLivenessClient", Client)
+    monkeypatch.setattr(headless.os, "kill", lambda pid, sig: kills.append((pid, sig)))
+
+    config = SimpleNamespace(
+        gms_shadow_mode=True,
+        engine_args=SimpleNamespace(node_rank=1, master_addr="leader", nnodes=2),
+    )
+    headless._maybe_start_vllm_rank_liveness_client(config)
+    clients[0].on_leader_lost(0, "liveness-timeout")
+
+    assert (clients[0].leader_host, clients[0].rank) == ("leader", 1)
+    assert kills == [(os.getpid(), signal.SIGTERM)]
+
+
 def test_rl_logprobs_force_converts_raw_mode():
     config = SimpleNamespace(
         enable_rl=True,

@@ -1760,3 +1760,21 @@ async def test_prefill_acquires_failover_lock_before_engine_init(monkeypatch):
 
     assert events == ["lock", "fence", "setup"]
     runtime.set_health_status.assert_called_once_with(True)
+
+
+@pytest.mark.asyncio
+async def test_snapshot_restore_does_not_reacquire_failover_lock(monkeypatch):
+    factory = _make_factory()
+    factory._acquire_failover_lock = AsyncMock(
+        side_effect=AssertionError("snapshot lifecycle already owns the lock")
+    )
+    monkeypatch.setenv("DYN_VLLM_GMS_LOCK_BEFORE_INIT", "1")
+
+    result = await factory._maybe_acquire_failover_lock_before_init(
+        Mock(),
+        SimpleNamespace(gms_shadow_mode=True),
+        snapshot_engine_present=True,
+    )
+
+    assert result == (None, False)
+    factory._acquire_failover_lock.assert_not_awaited()

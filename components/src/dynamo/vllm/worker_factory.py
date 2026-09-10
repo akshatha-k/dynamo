@@ -1263,6 +1263,8 @@ class WorkerFactory:
         self,
         runtime: DistributedRuntime,
         config: Config,
+        *,
+        snapshot_engine_present: bool = False,
     ) -> tuple[Any | None, bool]:
         """Fence shared KV initialization in the correctness-first mode.
 
@@ -1270,6 +1272,8 @@ class WorkerFactory:
         Setting ``DYN_VLLM_GMS_LOCK_BEFORE_INIT=0`` selects the explicitly
         configured preinitialized-standby path handled after setup.
         """
+        if snapshot_engine_present:
+            return None, False
         lock_before_init = os.environ.get("DYN_VLLM_GMS_LOCK_BEFORE_INIT", "1").lower()
         if not config.gms_shadow_mode:
             return None, False
@@ -1470,7 +1474,11 @@ class WorkerFactory:
         (
             early_failover_lock,
             early_failover_fence_run,
-        ) = await self._maybe_acquire_failover_lock_before_init(runtime, config)
+        ) = await self._maybe_acquire_failover_lock_before_init(
+            runtime,
+            config,
+            snapshot_engine_present=snapshot_engine is not None,
+        )
 
         # Use pre-created engine if provided (checkpoint mode), otherwise create new
         fpm_worker_id = str(generate_endpoint.connection_id())
@@ -1800,7 +1808,11 @@ class WorkerFactory:
         (
             early_failover_lock,
             early_failover_fence_run,
-        ) = await self._maybe_acquire_failover_lock_before_init(runtime, config)
+        ) = await self._maybe_acquire_failover_lock_before_init(
+            runtime,
+            config,
+            snapshot_engine_present=snapshot_engine is not None,
+        )
 
         # Use pre-created engine if provided (checkpoint mode), otherwise create new
         fpm_worker_id = str(generate_endpoint.connection_id())

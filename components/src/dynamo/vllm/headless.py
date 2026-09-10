@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
+import signal
 
 from .args import Config
 
@@ -100,4 +102,18 @@ def _maybe_start_vllm_rank_liveness_client(config: Config) -> None:
     nnodes = int(getattr(engine_args, "nnodes", 1) or 1)
     if nnodes <= 1 or node_rank < 1 or not leader_host:
         return
-    rl.RankLivenessClient(leader_host, node_rank).start()
+
+    def terminate_on_leader_lost(rank: int, reason: str) -> None:
+        logger.error(
+            "[GMS liveness] leader rank %d lost (%s); terminating rank %d",
+            rank,
+            reason,
+            node_rank,
+        )
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    rl.RankLivenessClient(
+        leader_host,
+        node_rank,
+        on_leader_lost=terminate_on_leader_lost,
+    ).start()
