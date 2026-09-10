@@ -1185,19 +1185,12 @@ class WorkerFactory:
         await lock.acquire(engine_id=f"engine-{engine_id}", timeout=timeout)
         return lock
 
-    async def _wake_up_kv_fenced(self, handler, tags: list[str]) -> None:
-        """Run collective_rpc('wake_up') with a bounded timeout, fail-closed.
-
-        A promotion remap that wedges (CUDA error, stuck engine core) must not
-        leave this process holding the failover lock while it reports healthy --
-        that is an unrecoverable partial failover that locks out every other
-        standby. On timeout, raise so the process exits and the kernel releases
-        the flock for another standby.
-        """
+    async def _wake_up_kv_fenced(self, handler) -> None:
+        """Bound shadow wake so a wedged remap cannot retain ownership."""
         timeout = float(os.environ.get("DYN_GMS_FAILOVER_WAKEUP_TIMEOUT_SECS", "120"))
         try:
             await asyncio.wait_for(
-                handler.engine_client.collective_rpc("wake_up", kwargs={"tags": tags}),
+                handler._pause_controller.resume(),
                 timeout=timeout,
             )
         except asyncio.TimeoutError:
@@ -1364,18 +1357,22 @@ class WorkerFactory:
             failover_metrics.set_state("waking")
             if was_contended:
                 failover_metrics.record_switch_attempt()
+        resume_attempted = False
         resumed = False
         try:
             await run_gms_failover_post_lock_fence(backend_name="vllm", role="shadow")
-            await handler._pause_controller.resume()
+            resume_attempted = True
+            await self._wake_up_kv_fenced(handler)
             resumed = True
             handler._pause_controller.mark_resumed()
             if promotion_warmup is not None:
                 await promotion_warmup()
             self._maybe_start_rank_liveness_monitor(handler, config)
         except BaseException:
-            if resumed:
+            if resume_attempted:
                 try:
+                    if not resumed:
+                        handler._pause_controller.mark_resumed()
                     await handler._pause_controller.pause(1, clear_cache=False)
                 except BaseException:
                     logger.exception("[Shadow] Failed to pause after activation error")

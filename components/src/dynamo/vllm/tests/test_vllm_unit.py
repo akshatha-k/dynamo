@@ -3,6 +3,7 @@
 
 """Unit tests for vLLM backend components."""
 
+import asyncio
 import importlib
 import json
 import logging
@@ -2473,6 +2474,77 @@ async def test_gms_shadow_sleeps_until_lock_then_wakes(monkeypatch):
         "resume",
         "mark_resumed",
         ("monitor", handler, config),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_gms_shadow_wake_timeout_requiesces_and_releases_lock(monkeypatch):
+    from dynamo.vllm.worker_factory import WorkerFactory
+
+    events = []
+
+    class Lock:
+        was_contended = True
+
+        async def release(self):
+            events.append("release")
+
+    class PauseController:
+        async def pause(self, *args, **kwargs):
+            events.append(("pause", args, kwargs))
+
+        async def resume(self):
+            events.append("resume")
+            await asyncio.Event().wait()
+
+        def mark_resumed(self):
+            events.append("mark_resumed")
+
+    class Runtime:
+        def set_health_status(self, status):
+            events.append(("health", status))
+
+    async def acquire_lock():
+        events.append("lock")
+        return Lock()
+
+    async def pass_fence(*, backend_name, role):
+        events.append(("fence", backend_name, role))
+
+    factory = WorkerFactory(
+        lambda *args, **kwargs: None,
+        lambda *args, **kwargs: None,
+        lambda *args, **kwargs: None,
+        lambda *args, **kwargs: None,
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setenv("ENGINE_ID", "1")
+    monkeypatch.setenv("DYN_GMS_FAILOVER_PRIMARY_ENGINE_ID", "0")
+    monkeypatch.setenv("DYN_GMS_FAILOVER_WAKEUP_TIMEOUT_SECS", "0.01")
+    monkeypatch.setattr(factory, "_acquire_failover_lock", acquire_lock)
+    monkeypatch.setattr(
+        "dynamo.vllm.worker_factory.run_gms_failover_post_lock_fence", pass_fence
+    )
+
+    handler = SimpleNamespace(_pause_controller=PauseController())
+    with pytest.raises(asyncio.TimeoutError):
+        await factory._maybe_wait_for_failover_lock(
+            handler,
+            Runtime(),
+            SimpleNamespace(gms_shadow_mode=True),
+        )
+
+    assert not hasattr(handler, "_gms_failover_lock")
+    assert events == [
+        ("pause", (1,), {"clear_cache": False}),
+        ("health", True),
+        "lock",
+        ("fence", "vllm", "shadow"),
+        "resume",
+        "mark_resumed",
+        ("pause", (1,), {"clear_cache": False}),
+        ("health", False),
+        "release",
     ]
 
 

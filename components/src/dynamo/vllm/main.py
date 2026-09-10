@@ -263,8 +263,6 @@ def _is_gms_load_format(engine_args: Any) -> bool:
 
 
 def _configure_gms_vllm_worker(engine_args: Any) -> None:
-    """Force GMS worker setup early enough for spawned vLLM workers."""
-
     current = getattr(engine_args, "worker_cls", None)
     if current not in (None, "auto", GMS_VLLM_WORKER_CLS):
         logger.warning(
