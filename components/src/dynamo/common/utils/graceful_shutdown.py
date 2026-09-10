@@ -22,7 +22,6 @@ _shutdown_started = asyncio.Event()
 
 
 def is_shutdown_in_progress() -> bool:
-    """Return whether this process is already handling graceful shutdown."""
     return _shutdown_started.is_set()
 
 

@@ -1144,10 +1144,9 @@ class WorkerFactory:
         return value.strip().lower() not in ("", "0", "false", "no", "off")
 
     # Private-bootstrap/scratch shadow KV is deferred: the isolated scratch pool
-    # that used to back a shadow's pre-lock init/prewarm has been removed. These
-    # knobs are now unsafe -- with them on, a shadow would init or prewarm against
-    # the SHARED GMS KV pool before it owns the failover lock, corrupting the live
-    # primary's KV. Fail closed rather than silently run against shared KV.
+    # that used to back those pre-lock modes has been removed. Their forced
+    # prepromotion bypasses the lease-aware shared-pool lifecycle below and can
+    # write shared KV before lock ownership, so fail closed.
     _REMOVED_PRIVATE_BOOTSTRAP_ENV_VARS = (
         "DYN_VLLM_GMS_PRIVATE_BOOTSTRAP_KV",
         "GMS_VLLM_PRIVATE_BOOTSTRAP_KV",
@@ -1265,14 +1264,20 @@ class WorkerFactory:
         runtime: DistributedRuntime,
         config: Config,
     ) -> tuple[Any | None, bool]:
-        """Acquire and fence shared KV before either vLLM worker role initializes."""
+        """Fence shared KV initialization in the correctness-first mode.
+
+        The default waits before engine setup, so takeover includes vLLM startup.
+        Setting ``DYN_VLLM_GMS_LOCK_BEFORE_INIT=0`` selects the explicitly
+        configured preinitialized-standby path handled after setup.
+        """
         lock_before_init = os.environ.get("DYN_VLLM_GMS_LOCK_BEFORE_INIT", "1").lower()
-        if not config.gms_shadow_mode or lock_before_init in {
-            "0",
-            "false",
-            "no",
-            "off",
-        }:
+        if not config.gms_shadow_mode:
+            return None, False
+        if lock_before_init in {"0", "false", "no", "off"}:
+            logger.warning(
+                "[Shadow] Preinitialized standby explicitly enabled; shared-KV "
+                "safety depends on the complete lease-aware vLLM integration"
+            )
             return None, False
 
         logger.info(
