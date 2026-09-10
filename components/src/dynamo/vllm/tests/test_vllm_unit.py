@@ -2276,6 +2276,9 @@ async def test_gms_primary_acquires_active_lock_before_registration(monkeypatch)
     )
     config = SimpleNamespace(gms_shadow_mode=True)
 
+    async def acquire_lock():
+        return lock
+
     monkeypatch.setenv("ENGINE_ID", "0")
     monkeypatch.setenv("DYN_GMS_FAILOVER_PRIMARY_ENGINE_ID", "0")
     monkeypatch.setattr(factory, "_acquire_failover_lock", fake_acquire)
@@ -2391,10 +2394,6 @@ async def test_gms_shadow_sleeps_until_lock_then_wakes(monkeypatch):
     ]
 
 
-async def _async_value(value):
-    return value
-
-
 @pytest.mark.asyncio
 async def test_gms_primary_releases_lock_when_post_lock_fence_fails(monkeypatch):
     from dynamo.vllm.worker_factory import WorkerFactory
@@ -2420,7 +2419,7 @@ async def test_gms_primary_releases_lock_when_post_lock_fence_fails(monkeypatch)
 
     monkeypatch.setenv("ENGINE_ID", "0")
     monkeypatch.setenv("DYN_GMS_FAILOVER_PRIMARY_ENGINE_ID", "0")
-    monkeypatch.setattr(factory, "_acquire_failover_lock", lambda: _async_value(lock))
+    monkeypatch.setattr(factory, "_acquire_failover_lock", acquire_lock)
     monkeypatch.setattr(
         "dynamo.vllm.worker_factory.run_gms_failover_post_lock_fence", fail_fence
     )
@@ -2479,9 +2478,12 @@ async def test_gms_shadow_requiesces_and_releases_lock_when_warmup_fails(monkeyp
     async def pass_fence(*, backend_name, role):
         events.append(("fence", backend_name, role))
 
+    async def acquire_lock():
+        return lock
+
     monkeypatch.setenv("ENGINE_ID", "1")
     monkeypatch.setenv("DYN_GMS_FAILOVER_PRIMARY_ENGINE_ID", "0")
-    monkeypatch.setattr(factory, "_acquire_failover_lock", lambda: _async_value(lock))
+    monkeypatch.setattr(factory, "_acquire_failover_lock", acquire_lock)
     monkeypatch.setattr(
         "dynamo.vllm.worker_factory.run_gms_failover_post_lock_fence", pass_fence
     )
