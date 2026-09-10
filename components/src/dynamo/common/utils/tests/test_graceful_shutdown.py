@@ -293,23 +293,30 @@ def test_cleanup_callback_timeout_does_not_block_shutdown(monkeypatch):
     mock_runtime.shutdown.assert_called_once()
 
 
-def test_shutdown_in_progress_reflects_active_shutdown():
-    """The shutdown-in-progress flag is visible before shutdown_event is set."""
+def test_shutdown_in_progress_reflects_in_flight_shutdown():
     assert is_shutdown_in_progress() is False
+    observed = []
 
     async def _run():
         mock_runtime = MagicMock()
-        mock_endpoint = AsyncMock()
-        mock_endpoint.unregister_endpoint_instance = AsyncMock(return_value=None)
+        shutdown_event = asyncio.Event()
+
+        async def observe_during_unregister():
+            observed.append((is_shutdown_in_progress(), shutdown_event.is_set()))
+
+        mock_endpoint = MagicMock()
+        mock_endpoint.unregister_endpoint_instance = observe_during_unregister
         await graceful_shutdown_with_discovery(
             runtime=mock_runtime,
             endpoints=[mock_endpoint],
-            shutdown_event=None,
+            shutdown_event=shutdown_event,
             grace_period_s=0,
         )
+        assert shutdown_event.is_set()
 
     asyncio.run(_run())
 
+    assert observed == [(True, False)]
     assert is_shutdown_in_progress() is True
 
 

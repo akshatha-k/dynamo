@@ -2169,11 +2169,11 @@ def _clear_gms_failover_env_leaks(monkeypatch):
 def test_gms_shadow_init_geometry_wait_honors_generic_timeout(monkeypatch):
     from dynamo.vllm import main as vllm_main
 
-    monkeypatch.setenv("GMS_KV_LEASE_GEOMETRY_WAIT_MS", "300000")
+    monkeypatch.setenv("GMS_KV_LEASE_GEOMETRY_WAIT_MS", "123456")
     monkeypatch.delenv("GMS_VLLM_KV_GEOMETRY_WAIT_MS", raising=False)
     monkeypatch.delenv("DYN_VLLM_GMS_SHADOW_INIT_GEOMETRY_WAIT_MS", raising=False)
 
-    assert vllm_main._gms_shadow_init_geometry_wait_ms() == 300_000
+    assert vllm_main._gms_shadow_init_geometry_wait_ms() == 123_456
 
 
 def test_gms_shadow_init_geometry_wait_clamps_negative_timeout(monkeypatch):
@@ -2192,8 +2192,19 @@ def test_vllm_gms_failover_isolates_jit_cache_by_container(monkeypatch):
     monkeypatch.setenv("TMPDIR", "/dev/shm/dynamo-jit/tmp")
     monkeypatch.setenv("FLASHINFER_CUBIN_DIR", "/dev/shm/dynamo-jit/flashinfer-cubins")
 
+    created = []
+    monkeypatch.setattr(
+        vllm_main.os,
+        "makedirs",
+        lambda path, *, exist_ok: created.append((path, exist_ok)),
+    )
+
     changed = vllm_main._maybe_isolate_jit_cache_dirs_by_container()
 
+    assert (
+        "/dev/shm/dynamo-jit/engine-1/tmp",
+        True,
+    ) in created
     assert os.environ["TMPDIR"] == "/dev/shm/dynamo-jit/engine-1/tmp"
     assert (
         os.environ["FLASHINFER_CUBIN_DIR"]
@@ -2225,8 +2236,6 @@ async def test_gms_reject_removed_private_bootstrap_options(monkeypatch):
 
     WorkerFactory._reject_removed_private_bootstrap_options()
 
-    # Each removed knob must fail closed rather than silently run a shadow
-    # against the shared KV pool before it owns the failover lock.
     for name in WorkerFactory._REMOVED_PRIVATE_BOOTSTRAP_ENV_VARS:
         monkeypatch.setenv(name, "1")
         with pytest.raises(RuntimeError, match="private-bootstrap"):

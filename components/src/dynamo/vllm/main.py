@@ -73,6 +73,7 @@ def _maybe_isolate_jit_cache_dirs_by_container() -> dict[str, tuple[str | None, 
             continue
         if previous and not force and not previous.startswith(base):
             continue
+        os.makedirs(value, exist_ok=True)
         os.environ[name] = value
         changed[name] = (previous, value)
     return changed
