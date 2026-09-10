@@ -23,6 +23,7 @@ DEFAULT_HEARTBEAT_MS = 250
 DEFAULT_TIMEOUT_MS = 750
 DEFAULT_LIVENESS_PORT = 29555
 DEFAULT_STARTUP_GRACE_MS = 30_000
+DEFAULT_FIRST_ACK_TIMEOUT_MS = 300_000
 
 
 def liveness_enabled() -> bool:
@@ -47,6 +48,16 @@ def startup_grace_ms() -> int:
     )
 
 
+def first_ack_timeout_ms() -> int:
+    return max(
+        startup_grace_ms(),
+        _int_env(
+            "DYN_GMS_RANK_LIVENESS_FIRST_ACK_TIMEOUT_MS",
+            DEFAULT_FIRST_ACK_TIMEOUT_MS,
+        ),
+    )
+
+
 def liveness_port() -> int:
     return _int_env("DYN_GMS_RANK_LIVENESS_PORT", DEFAULT_LIVENESS_PORT)
 
@@ -68,7 +79,7 @@ class RankLivenessClient:
     """Worker heartbeat client with optional leader-loss detection.
 
     When ``on_leader_lost`` is supplied, missing acknowledgements fence an orphaned
-    worker cohort within one timeout window.
+    worker cohort. Delayed startup uses a longer but finite first-ack deadline.
     """
 
     def __init__(
@@ -82,6 +93,7 @@ class RankLivenessClient:
         timeout_ms_override: Optional[int] = None,
         startup_grace_ms_override: Optional[int] = None,
         arm_after_first_ack: bool = False,
+        first_ack_timeout_ms_override: Optional[int] = None,
     ):
         self._leader_host = leader_host
         self._rank = int(rank)
@@ -101,6 +113,12 @@ class RankLivenessClient:
         )
         self._startup_grace = grace_value / 1000.0
         self._arm_after_first_ack = arm_after_first_ack
+        first_ack_value = (
+            first_ack_timeout_ms()
+            if first_ack_timeout_ms_override is None
+            else max(1, first_ack_timeout_ms_override)
+        )
+        self._first_ack_timeout = first_ack_value / 1000.0
         self._fired = False
 
     def start(self) -> None:
@@ -166,11 +184,12 @@ class RankLivenessClient:
                                 )
                             last_ack = now
                 if self._on_leader_lost is not None and not self._stop.is_set():
-                    if (
-                        last_ack is None
-                        and not self._arm_after_first_ack
-                        and now - started > self._startup_grace
-                    ):
+                    first_ack_deadline = (
+                        self._first_ack_timeout
+                        if self._arm_after_first_ack
+                        else self._startup_grace
+                    )
+                    if last_ack is None and now - started > first_ack_deadline:
                         self._fire(0, "startup-timeout")
                         return
                     if last_ack is not None and now - last_ack > self._timeout:

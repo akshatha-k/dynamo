@@ -116,4 +116,5 @@ def _maybe_start_vllm_rank_liveness_client(config: Config) -> None:
         node_rank,
         on_leader_lost=terminate_on_leader_lost,
         arm_after_first_ack=True,
+        first_ack_timeout_ms_override=rl.first_ack_timeout_ms(),
     ).start()

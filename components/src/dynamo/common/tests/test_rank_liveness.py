@@ -157,6 +157,7 @@ def test_client_can_wait_for_delayed_leader_before_arming():
         timeout_ms_override=60,
         startup_grace_ms_override=40,
         arm_after_first_ack=True,
+        first_ack_timeout_ms_override=500,
     )
     monitor = rl.RankLivenessMonitor(
         lambda _rank, _reason: None,
@@ -179,6 +180,32 @@ def test_client_can_wait_for_delayed_leader_before_arming():
     finally:
         client.stop()
         monitor.stop()
+
+
+def test_client_first_ack_wait_is_bounded_when_leader_never_appears():
+    fired = threading.Event()
+    calls: list[tuple[int, str]] = []
+    client = rl.RankLivenessClient(
+        "unused",
+        1,
+        interval_ms=20,
+        connect_addr=_endpoint(),
+        on_leader_lost=lambda rank, reason: (
+            calls.append((rank, reason)),
+            fired.set(),
+        ),
+        timeout_ms_override=80,
+        startup_grace_ms_override=20,
+        arm_after_first_ack=True,
+        first_ack_timeout_ms_override=60,
+    )
+
+    client.start()
+    try:
+        _wait(fired)
+        assert calls == [(0, "startup-timeout")]
+    finally:
+        client.stop()
 
 
 def test_worker_detects_leader_loss_after_acknowledgement():

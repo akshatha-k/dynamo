@@ -411,11 +411,20 @@ def test_headless_rank_liveness_terminates_when_leader_is_lost(monkeypatch):
     clients = []
 
     class Client:
-        def __init__(self, leader_host, rank, *, on_leader_lost, arm_after_first_ack):
+        def __init__(
+            self,
+            leader_host,
+            rank,
+            *,
+            on_leader_lost,
+            arm_after_first_ack,
+            first_ack_timeout_ms_override,
+        ):
             self.leader_host = leader_host
             self.rank = rank
             self.on_leader_lost = on_leader_lost
             self.arm_after_first_ack = arm_after_first_ack
+            self.first_ack_timeout_ms = first_ack_timeout_ms_override
             clients.append(self)
 
         def start(self):
@@ -423,6 +432,7 @@ def test_headless_rank_liveness_terminates_when_leader_is_lost(monkeypatch):
 
     kills = []
     monkeypatch.setattr(rl, "liveness_enabled", lambda: True)
+    monkeypatch.setattr(rl, "first_ack_timeout_ms", lambda: 123_000)
     monkeypatch.setattr(rl, "RankLivenessClient", Client)
     monkeypatch.setattr(headless.os, "kill", lambda pid, sig: kills.append((pid, sig)))
 
@@ -438,6 +448,7 @@ def test_headless_rank_liveness_terminates_when_leader_is_lost(monkeypatch):
         clients[0].rank,
         clients[0].arm_after_first_ack,
     ) == ("leader", 1, True)
+    assert clients[0].first_ack_timeout_ms == 123_000
     assert kills == [(os.getpid(), signal.SIGTERM)]
 
 
