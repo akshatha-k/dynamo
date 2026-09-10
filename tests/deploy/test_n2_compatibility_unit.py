@@ -19,27 +19,9 @@ from tests.deploy.dgd_utils import (
 )
 
 
-@pytest.mark.pre_merge
-@pytest.mark.sglang
-@pytest.mark.core
-@pytest.mark.framework_agnostic
-@pytest.mark.unit
-@pytest.mark.gpu_0
-@pytest.mark.parametrize(
-    "failure,pair_index",
-    [
-        ("startup", 1),
-        ("response", 1),
-        ("cleanup", 1),
-        ("response", 0),
-        ("previous-baseline-response", 0),
-        ("response+cleanup", 0),
-        ("managed-cleanup", 1),
-    ],
-)
-async def test_n2_failure_is_reported_and_teardown_attempted(
-    monkeypatch, tmp_path, failure, pair_index
-):
+@pytest.fixture
+def n2_harness(monkeypatch, tmp_path, request):
+    failure = request.param
     output = tmp_path / "evidence"
     image = {"pinned": "registry/image@sha256:" + "a" * 64, "version": "1.5.0"}
     plan = {
@@ -54,8 +36,6 @@ async def test_n2_failure_is_reported_and_teardown_attempted(
             "embedding": {"id": "test/model", "revision": "a" * 40, "dimensions": 2}
         },
     }
-    if failure.startswith("previous-baseline"):
-        plan["baseline_failed"] = "first-control/report.json"
     deployment = SimpleNamespace(
         get_pods=Mock(
             return_value={
@@ -99,6 +79,37 @@ async def test_n2_failure_is_reported_and_teardown_attempted(
             return_value=[{"status": "failed" if "response" in failure else "passed"}]
         ),
     )
+    return SimpleNamespace(
+        plan=plan, output=output, commands=commands, context=context, failure=failure
+    )
+
+
+@pytest.mark.pre_merge
+@pytest.mark.sglang
+@pytest.mark.core
+@pytest.mark.framework_agnostic
+@pytest.mark.unit
+@pytest.mark.gpu_0
+@pytest.mark.parametrize(
+    "n2_harness,pair_index",
+    [
+        ("startup", 1),
+        ("response", 1),
+        ("cleanup", 1),
+        ("response", 0),
+        ("response+cleanup", 0),
+        ("managed-cleanup", 1),
+    ],
+    indirect=["n2_harness"],
+)
+async def test_n2_failure_is_reported_and_teardown_attempted(
+    n2_harness, tmp_path, pair_index
+):
+    plan = n2_harness.plan
+    output = n2_harness.output
+    commands = n2_harness.commands
+    context = n2_harness.context
+    failure = n2_harness.failure
     expected = (
         ExceptionGroup
         if failure in ("cleanup", "managed-cleanup")
@@ -127,6 +138,34 @@ async def test_n2_failure_is_reported_and_teardown_attempted(
         assert commands.call_count == before
     if failure != "startup":
         assert context.exited
+
+
+@pytest.mark.pre_merge
+@pytest.mark.sglang
+@pytest.mark.core
+@pytest.mark.framework_agnostic
+@pytest.mark.unit
+@pytest.mark.gpu_0
+@pytest.mark.parametrize("n2_harness", ["success"], indirect=True)
+async def test_second_control_runs_after_first_control_fails(n2_harness, tmp_path):
+    plan = n2_harness.plan
+    plan["baseline_failed"] = "first-control/report.json"
+    plan["models"]["chat"] = plan["models"]["embedding"]
+
+    await suite.test_n2_compatibility(plan, tmp_path, 0, "chat")
+
+    suite.ManagedDeployment.assert_called_once()
+    suite.probe.assert_called_once()
+    assert suite.probe.call_args.args[1] == "chat"
+    report = json.loads((n2_harness.output / "report.json").read_text())
+    assert report["status"] == "passed"
+    assert plan["baseline_failed"] == "first-control/report.json"
+    before = n2_harness.commands.call_count
+    with pytest.raises(pytest.skip.Exception, match="not validated"):
+        await suite.test_n2_compatibility(plan, tmp_path, 1, "chat")
+    assert n2_harness.commands.call_count == before
+    suite.ManagedDeployment.assert_called_once()
+    suite.probe.assert_called_once()
 
 
 @pytest.mark.pre_merge

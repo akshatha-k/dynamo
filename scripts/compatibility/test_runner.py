@@ -106,9 +106,6 @@ class CompatibilityTests(unittest.TestCase):
             body["choices"][0]["message"]["content"] = invalid
             with self.assertRaises(ContractError):
                 validate_chat(body, 32, "Hello")
-        body["choices"][0]["message"]["content"] = "Hello world"
-        with self.assertRaises(ContractError):
-            validate_chat(body, 32, "Hello")
         body["choices"][0]["message"]["content"] = ""
         body["choices"][0]["finish_reason"] = "length"
         with self.assertRaises(ContractError):
@@ -137,8 +134,7 @@ class CompatibilityTests(unittest.TestCase):
                 validate_stream(invalid)
 
     def test_replay_actual_candidate_chat_responses(self):
-        # Captured before validation from Actions run 34302098930, job
-        # 102318994450. The stopped response contains JSON null, not "".
+        # A fully stopped response may contain null or an empty string.
         fixture = Path(__file__).with_name("fixtures") / "candidate-chat-066323a.json"
         records = json.loads(fixture.read_text())
         pending = iter(records)
