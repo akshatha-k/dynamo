@@ -363,3 +363,27 @@ def test_fast_failover_exit_runs_after_unregister_before_runtime_shutdown(monkey
     assert call_order == ["unregister", "fast_exit"]
     assert shutdown_event.is_set()
     mock_runtime.shutdown.assert_not_called()
+
+
+def test_normal_shutdown_does_not_apply_failover_unregister_timeout(monkeypatch):
+    monkeypatch.setenv("DYN_GMS_FAILOVER_FAST_EXIT_ON_SIGTERM", "0")
+    endpoint = AsyncMock()
+    endpoint.unregister_endpoint_instance = AsyncMock(return_value=None)
+    runtime = MagicMock()
+
+    async def unexpected_wait_for(*_args, **_kwargs):
+        raise AssertionError("normal shutdown must not time-box unregister")
+
+    monkeypatch.setattr(_gs.asyncio, "wait_for", unexpected_wait_for)
+
+    asyncio.run(
+        graceful_shutdown_with_discovery(
+            runtime=runtime,
+            endpoints=[endpoint],
+            shutdown_event=None,
+            grace_period_s=0,
+        )
+    )
+
+    endpoint.unregister_endpoint_instance.assert_awaited_once()
+    runtime.shutdown.assert_called_once()

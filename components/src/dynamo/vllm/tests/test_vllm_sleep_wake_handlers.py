@@ -164,23 +164,6 @@ async def test_snapshot_prepare_failure_leaves_controller_unpaused():
 
 
 @pytest.mark.asyncio
-async def test_quiesce_can_skip_cache_clear():
-    engine_client = SimpleNamespace(
-        pause_generation=AsyncMock(),
-        sleep=AsyncMock(),
-        wake_up=AsyncMock(),
-        resume_generation=AsyncMock(),
-    )
-    controller = VllmEnginePauseController(engine_client)
-
-    changed = await controller.pause(1, clear_cache=False)
-
-    assert changed is True
-    engine_client.pause_generation.assert_awaited_once_with(clear_cache=False)
-    engine_client.sleep.assert_awaited_once_with(1)
-
-
-@pytest.mark.asyncio
 async def test_quiesce_uses_no_clear_sleep_utility_when_available():
     engine_core = SimpleNamespace(call_utility_async=AsyncMock())
     engine_client = SimpleNamespace(

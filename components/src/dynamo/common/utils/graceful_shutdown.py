@@ -148,19 +148,23 @@ async def graceful_shutdown_with_discovery(
     # kernel flock "immediately", but a wedged discovery backend (etcd/kube) --
     # plausible in exactly the failure that triggers failover -- would otherwise
     # block here forever, and repeat SIGTERMs are ignored once shutdown started.
-    unregister_timeout = failover_unregister_timeout_secs()
-    try:
-        await asyncio.wait_for(
-            _unregister_endpoints(list(endpoints)), timeout=unregister_timeout
-        )
-    except asyncio.TimeoutError:
-        logger.warning(
-            "Discovery unregister did not complete within %.1fs; proceeding so "
-            "failover ownership is released promptly",
-            unregister_timeout,
-        )
+    fast_failover_exit = fast_failover_exit_enabled()
+    if fast_failover_exit:
+        unregister_timeout = failover_unregister_timeout_secs()
+        try:
+            await asyncio.wait_for(
+                _unregister_endpoints(list(endpoints)), timeout=unregister_timeout
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Discovery unregister did not complete within %.1fs; proceeding so "
+                "failover ownership is released promptly",
+                unregister_timeout,
+            )
+    else:
+        await _unregister_endpoints(list(endpoints))
 
-    if fast_failover_exit_enabled():
+    if fast_failover_exit:
         _fast_exit_after_failover_unregister(shutdown_event)
 
     if grace_period_s > 0:

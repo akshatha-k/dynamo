@@ -2158,6 +2158,7 @@ async def test_generate_text_mode_notifies_for_empty_decoded_token():
     assert chunks[0]["choices"][0]["delta"]["content"] == ""
     assert context.notifications == 1
 
+
 @pytest.fixture(autouse=True)
 def _clear_gms_failover_env_leaks(monkeypatch):
     monkeypatch.delenv("DYN_VLLM_GMS_ACTIVE_LOCK_HELD", raising=False)
@@ -2222,7 +2223,6 @@ async def test_gms_reject_removed_private_bootstrap_options(monkeypatch):
     for name in WorkerFactory._REMOVED_PRIVATE_BOOTSTRAP_ENV_VARS:
         monkeypatch.delenv(name, raising=False)
 
-    # No knobs set -> no error.
     WorkerFactory._reject_removed_private_bootstrap_options()
 
     # Each removed knob must fail closed rather than silently run a shadow
@@ -2388,4 +2388,122 @@ async def test_gms_shadow_sleeps_until_lock_then_wakes(monkeypatch):
         ("fence", "vllm", "shadow"),
         "resume",
         "mark_resumed",
+    ]
+
+
+async def _async_value(value):
+    return value
+
+
+@pytest.mark.asyncio
+async def test_gms_primary_releases_lock_when_post_lock_fence_fails(monkeypatch):
+    from dynamo.vllm.worker_factory import WorkerFactory
+
+    events = []
+
+    class Lock:
+        async def release(self):
+            events.append("release")
+
+    lock = Lock()
+    factory = WorkerFactory(
+        lambda *args, **kwargs: None,
+        lambda *args, **kwargs: None,
+        lambda *args, **kwargs: None,
+        lambda *args, **kwargs: None,
+        lambda *args, **kwargs: None,
+    )
+
+    async def fail_fence(*, backend_name, role):
+        events.append(("fence", backend_name, role))
+        raise RuntimeError("fence failed")
+
+    monkeypatch.setenv("ENGINE_ID", "0")
+    monkeypatch.setenv("DYN_GMS_FAILOVER_PRIMARY_ENGINE_ID", "0")
+    monkeypatch.setattr(factory, "_acquire_failover_lock", lambda: _async_value(lock))
+    monkeypatch.setattr(
+        "dynamo.vllm.worker_factory.run_gms_failover_post_lock_fence", fail_fence
+    )
+
+    handler = SimpleNamespace()
+    with pytest.raises(RuntimeError, match="fence failed"):
+        await factory._maybe_wait_for_failover_lock(
+            handler,
+            SimpleNamespace(),
+            SimpleNamespace(gms_shadow_mode=True),
+        )
+
+    assert not hasattr(handler, "_gms_failover_lock")
+    assert events == [("fence", "vllm", "active"), "release"]
+
+
+@pytest.mark.asyncio
+async def test_gms_shadow_requiesces_and_releases_lock_when_warmup_fails(monkeypatch):
+    from dynamo.vllm.worker_factory import WorkerFactory
+
+    events = []
+
+    class Lock:
+        was_contended = True
+
+        async def release(self):
+            events.append("release")
+
+    class PauseController:
+        async def pause(self, *args, **kwargs):
+            events.append(("pause", args, kwargs))
+
+        async def resume(self):
+            events.append("resume")
+
+        def mark_resumed(self):
+            events.append("mark_resumed")
+
+    class Runtime:
+        def set_health_status(self, status):
+            events.append(("health", status))
+
+    factory = WorkerFactory(
+        lambda *args, **kwargs: None,
+        lambda *args, **kwargs: None,
+        lambda *args, **kwargs: None,
+        lambda *args, **kwargs: None,
+        lambda *args, **kwargs: None,
+    )
+    lock = Lock()
+
+    async def fail_warmup():
+        events.append("warmup")
+        raise RuntimeError("warmup failed")
+
+    async def pass_fence(*, backend_name, role):
+        events.append(("fence", backend_name, role))
+
+    monkeypatch.setenv("ENGINE_ID", "1")
+    monkeypatch.setenv("DYN_GMS_FAILOVER_PRIMARY_ENGINE_ID", "0")
+    monkeypatch.setattr(factory, "_acquire_failover_lock", lambda: _async_value(lock))
+    monkeypatch.setattr(
+        "dynamo.vllm.worker_factory.run_gms_failover_post_lock_fence", pass_fence
+    )
+
+    handler = SimpleNamespace(_pause_controller=PauseController())
+    with pytest.raises(RuntimeError, match="warmup failed"):
+        await factory._maybe_wait_for_failover_lock(
+            handler,
+            Runtime(),
+            SimpleNamespace(gms_shadow_mode=True),
+            promotion_warmup=fail_warmup,
+        )
+
+    assert not hasattr(handler, "_gms_failover_lock")
+    assert events == [
+        ("pause", (1,), {"clear_cache": False}),
+        ("health", True),
+        ("fence", "vllm", "shadow"),
+        "resume",
+        "mark_resumed",
+        "warmup",
+        ("pause", (1,), {"clear_cache": False}),
+        ("health", False),
+        "release",
     ]
