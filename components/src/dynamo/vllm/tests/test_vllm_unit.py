@@ -2276,9 +2276,6 @@ async def test_gms_primary_acquires_active_lock_before_registration(monkeypatch)
     )
     config = SimpleNamespace(gms_shadow_mode=True)
 
-    async def acquire_lock():
-        return lock
-
     monkeypatch.setenv("ENGINE_ID", "0")
     monkeypatch.setenv("DYN_GMS_FAILOVER_PRIMARY_ENGINE_ID", "0")
     monkeypatch.setattr(factory, "_acquire_failover_lock", fake_acquire)
@@ -2405,6 +2402,10 @@ async def test_gms_primary_releases_lock_when_post_lock_fence_fails(monkeypatch)
             events.append("release")
 
     lock = Lock()
+
+    async def acquire_lock():
+        return lock
+
     factory = WorkerFactory(
         lambda *args, **kwargs: None,
         lambda *args, **kwargs: None,
