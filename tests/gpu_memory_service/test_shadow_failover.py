@@ -10,7 +10,6 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
-from gms_kv_ring.daemon.client import DaemonClient
 from gpu_memory_service.server.fsm import ServerState
 
 from tests.gpu_memory_service.common.runtime import (
@@ -263,6 +262,8 @@ def test_gms_minimal_cold_hbm_failover_vllm(
         )
         assert repeated_primary_output == primary_output
 
+        from gms_kv_ring.daemon.client import DaemonClient
+
         with DaemonClient(manager.kv_directory_socket) as directory:
             _entries, epoch, writer = _wait_for_directory_writer(
                 directory, manager.kv_directory_manifest, "engine-primary"
@@ -351,6 +352,8 @@ def test_gms_authoritative_hbm_failover_vllm(
                 failure_message="Primary HBM hydration sibling warmup failed",
                 success_message="Primary HBM hydration sibling warmup OK",
             )
+
+        from gms_kv_ring.daemon.client import DaemonClient
 
         with DaemonClient(manager.kv_directory_socket) as directory:
             _entries, epoch, writer = _wait_for_directory_writer(
