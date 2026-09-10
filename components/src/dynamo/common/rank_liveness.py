@@ -19,8 +19,6 @@ from dynamo.common.utils.env import env_int as _int_env
 
 logger = logging.getLogger(__name__)
 
-# Defaults: ~750ms detection (timeout) with a 250ms heartbeat. Well under the ~20s
-# tuned NCCL window, and the CPU-thread heartbeat is immune to GPU-collective stalls.
 DEFAULT_HEARTBEAT_MS = 250
 DEFAULT_TIMEOUT_MS = 750
 DEFAULT_LIVENESS_PORT = 29555

@@ -2454,6 +2454,13 @@ async def test_gms_shadow_sleeps_until_lock_then_wakes(monkeypatch):
         "dynamo.vllm.worker_factory.run_gms_failover_post_lock_fence",
         fake_post_lock_fence,
     )
+    monkeypatch.setattr(
+        factory,
+        "_maybe_start_rank_liveness_monitor",
+        lambda candidate, candidate_config: events.append(
+            ("monitor", candidate, candidate_config)
+        ),
+    )
 
     await factory._maybe_wait_for_failover_lock(handler, Runtime(), config)
 
@@ -2465,6 +2472,7 @@ async def test_gms_shadow_sleeps_until_lock_then_wakes(monkeypatch):
         ("fence", "vllm", "shadow"),
         "resume",
         "mark_resumed",
+        ("monitor", handler, config),
     ]
 
 

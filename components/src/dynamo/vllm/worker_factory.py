@@ -1249,8 +1249,6 @@ class WorkerFactory:
                 logger.debug(
                     "[GMS liveness] lock release on rank loss failed", exc_info=True
                 )
-            # The cohort is broken (a TP rank is gone); bring the leader down so it
-            # stops holding the GPU/KV and the shadow (now lock holder) serves.
             os.kill(os.getpid(), signal.SIGTERM)
 
         monitor = rl.RankLivenessMonitor(on_rank_lost, expected_ranks=range(1, nnodes))
@@ -1374,6 +1372,7 @@ class WorkerFactory:
             handler._pause_controller.mark_resumed()
             if promotion_warmup is not None:
                 await promotion_warmup()
+            self._maybe_start_rank_liveness_monitor(handler, config)
         except BaseException:
             if resumed:
                 try:
