@@ -83,6 +83,7 @@ class RankLivenessClient:
         on_leader_lost: Callable[[int, str], None] | None = None,
         timeout_ms_override: Optional[int] = None,
         startup_grace_ms_override: Optional[int] = None,
+        arm_after_first_ack: bool = False,
     ):
         self._leader_host = leader_host
         self._rank = int(rank)
@@ -101,6 +102,7 @@ class RankLivenessClient:
             else max(0, startup_grace_ms_override)
         )
         self._startup_grace = grace_value / 1000.0
+        self._arm_after_first_ack = arm_after_first_ack
         self._fired = False
 
     def start(self) -> None:
@@ -166,7 +168,11 @@ class RankLivenessClient:
                                 )
                             last_ack = now
                 if self._on_leader_lost is not None and not self._stop.is_set():
-                    if last_ack is None and now - started > self._startup_grace:
+                    if (
+                        last_ack is None
+                        and not self._arm_after_first_ack
+                        and now - started > self._startup_grace
+                    ):
                         self._fire(0, "startup-timeout")
                         return
                     if last_ack is not None and now - last_ack > self._timeout:

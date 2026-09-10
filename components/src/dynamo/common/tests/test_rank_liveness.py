@@ -141,32 +141,43 @@ def test_registered_rank_silence_fires_liveness_timeout():
         monitor.stop()
 
 
-def test_unexpected_multipart_identity_does_not_arm_monitor():
-    import zmq
-
+def test_client_can_wait_for_delayed_leader_before_arming():
     endpoint = _endpoint()
     fired = threading.Event()
     calls: list[tuple[int, str]] = []
-    monitor = rl.RankLivenessMonitor(
-        lambda rank, reason: (calls.append((rank, reason)), fired.set()),
-        bind_addr=endpoint,
-        timeout_ms_override=100,
-        expected_ranks={1},
-        startup_grace_ms_override=80,
+    client = rl.RankLivenessClient(
+        "unused",
+        1,
+        interval_ms=20,
+        connect_addr=endpoint,
+        on_leader_lost=lambda rank, reason: (
+            calls.append((rank, reason)),
+            fired.set(),
+        ),
+        timeout_ms_override=60,
+        startup_grace_ms_override=40,
+        arm_after_first_ack=True,
     )
-    socket = zmq.Context.instance().socket(zmq.DEALER)
-    socket.setsockopt(zmq.IDENTITY, b"rank-9")
-    socket.setsockopt(zmq.LINGER, 0)
+    monitor = rl.RankLivenessMonitor(
+        lambda _rank, _reason: None,
+        bind_addr=endpoint,
+        timeout_ms_override=500,
+    )
 
-    monitor.start()
-    time.sleep(0.03)
-    socket.connect(endpoint)
+    client.start()
     try:
-        socket.send(b"hb")
+        time.sleep(0.12)
+        assert not fired.is_set()
+
+        monitor.start()
+        assert monitor.wait_for_ranks({1}, timeout=1.0)
+        time.sleep(0.05)
+        monitor.stop()
+
         _wait(fired)
-        assert calls == [(1, "startup-timeout")]
+        assert calls == [(0, "liveness-timeout")]
     finally:
-        socket.close(0)
+        client.stop()
         monitor.stop()
 
 

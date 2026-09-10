@@ -381,10 +381,11 @@ def test_headless_rank_liveness_terminates_when_leader_is_lost(monkeypatch):
     clients = []
 
     class Client:
-        def __init__(self, leader_host, rank, *, on_leader_lost):
+        def __init__(self, leader_host, rank, *, on_leader_lost, arm_after_first_ack):
             self.leader_host = leader_host
             self.rank = rank
             self.on_leader_lost = on_leader_lost
+            self.arm_after_first_ack = arm_after_first_ack
             clients.append(self)
 
         def start(self):
@@ -402,7 +403,11 @@ def test_headless_rank_liveness_terminates_when_leader_is_lost(monkeypatch):
     headless._maybe_start_vllm_rank_liveness_client(config)
     clients[0].on_leader_lost(0, "liveness-timeout")
 
-    assert (clients[0].leader_host, clients[0].rank) == ("leader", 1)
+    assert (
+        clients[0].leader_host,
+        clients[0].rank,
+        clients[0].arm_after_first_ack,
+    ) == ("leader", 1, True)
     assert kills == [(os.getpid(), signal.SIGTERM)]
 
 

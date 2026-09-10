@@ -91,7 +91,6 @@ def run_dynamo_headless(config: Config) -> None:
 
 
 def _maybe_start_vllm_rank_liveness_client(config: Config) -> None:
-    """Start the worker-side ZMQ rank-liveness channel for headless nodes."""
     from dynamo.common import rank_liveness as rl
 
     if not rl.liveness_enabled() or not config.gms_shadow_mode:
@@ -116,4 +115,5 @@ def _maybe_start_vllm_rank_liveness_client(config: Config) -> None:
         leader_host,
         node_rank,
         on_leader_lost=terminate_on_leader_lost,
+        arm_after_first_ack=True,
     ).start()
