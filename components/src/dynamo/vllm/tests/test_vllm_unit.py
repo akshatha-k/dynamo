@@ -372,6 +372,35 @@ def test_headless_namespace_has_required_fields(mock_vllm_cli):
     assert hasattr(ns, "tensor_parallel_size")
 
 
+def test_cli_shadow_mode_waits_for_primary_kv_geometry(monkeypatch):
+    main = _load_vllm_main()
+    from gpu_memory_service.integrations.vllm import install_vmm_ipc_kv
+
+    for name in (
+        "DYN_GMS_FAILOVER_SHADOW_MODE",
+        "DYN_VLLM_GMS_SHADOW_MODE",
+        "DYN_VLLM_GMS_ACTIVE_LOCK_HELD",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("ENGINE_ID", "1")
+    monkeypatch.setenv("DYN_GMS_FAILOVER_PRIMARY_ENGINE_ID", "0")
+    observed = []
+    monkeypatch.setattr(main, "_gms_shadow_init_geometry_wait_ms", lambda: 123)
+    monkeypatch.setattr(
+        install_vmm_ipc_kv,
+        "_existing_shared_kv_blocks",
+        lambda *, wait_ms: observed.append(wait_ms) or 42,
+    )
+    config = SimpleNamespace(
+        gms_shadow_mode=True,
+        engine_args=SimpleNamespace(load_format="gms"),
+    )
+
+    main._maybe_wait_for_gms_primary_kv_before_init(config)
+
+    assert observed == [123]
+
+
 def test_headless_rank_liveness_terminates_when_leader_is_lost(monkeypatch):
     import signal
 

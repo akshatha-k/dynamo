@@ -244,9 +244,11 @@ def _register_model_source_path(config: Config, vllm_config: VllmConfig) -> str:
     return config.model
 
 
-def _gms_failover_shadow_member() -> bool:
+def _gms_failover_shadow_member(*, configured: bool = False) -> bool:
     if not (
-        env_bool("DYN_GMS_FAILOVER_SHADOW_MODE") or env_bool("DYN_VLLM_GMS_SHADOW_MODE")
+        configured
+        or env_bool("DYN_GMS_FAILOVER_SHADOW_MODE")
+        or env_bool("DYN_VLLM_GMS_SHADOW_MODE")
     ):
         return False
     if env_bool("DYN_VLLM_GMS_ACTIVE_LOCK_HELD"):
@@ -316,7 +318,7 @@ def _maybe_wait_for_gms_primary_kv_before_init(config: Config) -> None:
         return
     if not config.gms_shadow_mode:
         return
-    if not _gms_failover_shadow_member():
+    if not _gms_failover_shadow_member(configured=config.gms_shadow_mode):
         return
     if not env_bool("DYN_VLLM_GMS_WAIT_FOR_PRIMARY_KV_BEFORE_INIT", default=True):
         return
